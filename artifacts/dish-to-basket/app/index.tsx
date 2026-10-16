@@ -33,6 +33,7 @@ import {
   POPULAR_LOCATIONS,
   crawlRealTimeStoreETAs,
   getIngredientImage,
+  DEFAULT_AI_BASE_URL,
 } from "@/services/ingredientService";
 
 const STORAGE_KEY = "dish-to-basket.active-plan.v8";
@@ -115,8 +116,8 @@ export default function HomeScreen() {
   // Settings State
   const [aiProvider, setAiProvider] = useState<AiProvider>("nvidia");
   const [apiKeyInput, setApiKeyInput] = useState("");
-  const [baseUrlInput, setBaseUrlInput] = useState("");
-  const [modelInput, setModelInput] = useState("stepfun-ai/step-5-preview");
+  const [baseUrlInput, setBaseUrlInput] = useState(DEFAULT_AI_BASE_URL);
+  const [modelInput, setModelInput] = useState("meta/llama-3.2-11b-vision-instruct");
   const [testingAi, setTestingAi] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
 
