@@ -1,8 +1,14 @@
 const defaultBaseUrl = "https://integrate.api.nvidia.com/v1";
-const defaultModel = "meta/llama-3.1-8b-instruct";
+const defaultModel = "deepseek-ai/deepseek-v4.1-flash";
 
 export const nvidiaNimConfig = {
-  apiKey: process.env.NVIDIA_NIM_API_KEY,
-  baseUrl: (process.env.NVIDIA_NIM_BASE_URL ?? defaultBaseUrl).replace(/\/+$/, ""),
-  model: process.env.NVIDIA_NIM_MODEL ?? defaultModel,
+  get apiKey() {
+    return process.env.NVIDIA_NIM_API_KEY;
+  },
+  get baseUrl() {
+    return (process.env.NVIDIA_NIM_BASE_URL ?? defaultBaseUrl).replace(/\/+$/, "");
+  },
+  get model() {
+    return process.env.NVIDIA_NIM_MODEL ?? defaultModel;
+  },
 };

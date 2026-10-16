@@ -8,9 +8,16 @@
     "scheme": "dish-to-basket",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "bundleIdentifier": "com.dishtobasket.app"
     },
-    "android": {},
+    "android": {
+      "package": "com.dishtobasket.app",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#ffffff"
+      }
+    },
     "web": {
       "favicon": "./assets/images/icon.png"
     },

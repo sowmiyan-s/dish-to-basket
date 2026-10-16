@@ -122,17 +122,18 @@ router.post("/ingredient-plans/analyze", async (req, res) => {
     const client = new OpenAI({
       apiKey: nvidiaNimConfig.apiKey,
       baseURL: nvidiaNimConfig.baseUrl,
-      timeout: 45_000,
+      timeout: 90_000,
       maxRetries: 1,
     });
     const completion = await client.chat.completions.create({
       model: nvidiaNimConfig.model,
-      max_tokens: 1500,
+      max_tokens: 4096,
+      temperature: 0.1,
       messages: [
         {
           role: "system",
           content:
-            "You are a practical recipe ingredient planning agent for Indian home cooking. For the supplied dishes, produce one combined shopping list scaled to the requested servings. Merge duplicate ingredients across dishes, use sensible metric or common kitchen units, and list pantry staples and spices too. If a dish has multiple common versions, use a familiar home-style version and put a short assumption in notes. Return only valid JSON in this shape: {\"ingredients\":[{\"name\":\"onion\",\"quantity\":2,\"unit\":\"medium\",\"category\":\"Produce\",\"notes\":\"\",\"usedIn\":[\"dish name\"]}]}. Categories must be Produce, Dairy, Pantry, Spices, Proteins, or Other. Quantities must be positive numbers.",
+            "You are a practical recipe ingredient planning agent for Indian home cooking. Keep internal reasoning concise (at most 2 sentences) and output strictly valid JSON. For the supplied dishes, produce one combined shopping list scaled to the requested servings. Merge duplicate ingredients across dishes, use sensible metric or common kitchen units, and list pantry staples and spices too. If a dish has multiple common versions, use a familiar home-style version and put a short assumption in notes. Return only valid JSON in this shape: {\"ingredients\":[{\"name\":\"onion\",\"quantity\":2,\"unit\":\"medium\",\"category\":\"Produce\",\"notes\":\"\",\"usedIn\":[\"dish name\"]}]}. Categories must be Produce, Dairy, Pantry, Spices, Proteins, or Other. Quantities must be positive numbers.",
         },
         {
           role: "user",
@@ -141,15 +142,27 @@ router.post("/ingredient-plans/analyze", async (req, res) => {
       ],
     });
 
-    const content = completion.choices[0]?.message?.content;
+    const choice = completion.choices[0];
+    const message = choice?.message as (typeof choice.message & { reasoning_content?: string }) | undefined;
+    let content = message?.content;
+    const reasoning = message?.reasoning_content;
+
+    if (!content || content.trim().length === 0) {
+      if (reasoning && reasoning.trim().length > 0) {
+        content = reasoning;
+      }
+    }
+
     if (!content) {
       throw new Error("NVIDIA NIM returned an empty response.");
     }
+
     const ingredients = parseIngredientResponse(content);
     res.json({
       ingredients,
       provider: "NVIDIA NIM",
       model: nvidiaNimConfig.model,
+      reasoning: reasoning ? reasoning.slice(0, 500) : undefined,
     });
   } catch (err) {
     req.log.error({ err, model: nvidiaNimConfig.model }, "Ingredient analysis failed.");
