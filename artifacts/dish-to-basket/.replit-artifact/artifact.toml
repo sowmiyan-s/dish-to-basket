@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/"
+title = "Dish to Basket"
+description = "A mobile meal-shopping assistant that converts dish names into cooking ingredients, compares products and estimated basket totals across Indian grocery platforms, and helps users choose the most budget-friendly option."
+version = "1.0.0"
+id = "artifacts/dish-to-basket"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/" ]
+localPort = 20227
+
+[services.development]
+run = "pnpm --filter @workspace/dish-to-basket run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/dish-to-basket", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/dish-to-basket", "run", "serve" ]
+
+[services.env]
+PORT = "20227"
+BASE_PATH = "/"

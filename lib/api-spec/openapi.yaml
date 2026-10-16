@@ -1,0 +1,120 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: ingredient-plans
+    description: AI-generated cooking ingredient plans
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /ingredient-plans/analyze:
+    post:
+      operationId: analyzeIngredientPlan
+      tags: [ingredient-plans]
+      summary: Analyze dishes and produce a combined ingredient list
+      description: Uses the configured NVIDIA NIM model to estimate ingredient quantities for the requested servings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeIngredientPlanRequest"
+      responses:
+        "200":
+          description: Ingredient plan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngredientPlanResponse"
+        "400":
+          description: Invalid dish or serving input
+        "502":
+          description: The configured model returned an invalid or unavailable response
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    AnalyzeIngredientPlanRequest:
+      type: object
+      properties:
+        dishes:
+          type: array
+          minItems: 1
+          maxItems: 8
+          items:
+            type: string
+            minLength: 1
+            maxLength: 80
+        servings:
+          type: integer
+          minimum: 1
+          maximum: 24
+      required:
+        - dishes
+        - servings
+    IngredientPlanItem:
+      type: object
+      properties:
+        name:
+          type: string
+        quantity:
+          type: number
+          exclusiveMinimum: 0
+        unit:
+          type: string
+        category:
+          type: string
+        notes:
+          type: string
+        usedIn:
+          type: array
+          items:
+            type: string
+      required:
+        - name
+        - quantity
+        - unit
+        - category
+        - notes
+        - usedIn
+    IngredientPlanResponse:
+      type: object
+      properties:
+        ingredients:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/IngredientPlanItem"
+        provider:
+          type: string
+        model:
+          type: string
+      required:
+        - ingredients
+        - provider
+        - model
+
