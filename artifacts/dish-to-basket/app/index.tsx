@@ -651,12 +651,22 @@ export default function HomeScreen() {
             )}
 
             {/* Dish Summary & Action Card */}
+            {/* Dish Header & Shopping Actions */}
             {plan && !isAnalyzing && (
               <View style={styles.recipeHeaderCard}>
                 <View style={styles.recipeHeaderTop}>
                   <View style={{ flex: 1, paddingRight: 8 }}>
                     <Text style={styles.recipeTitle}>{plan.menuTitle}</Text>
-                    <Text style={styles.recipeIdeology}>{plan.culinaryIdeology}</Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                      <View style={styles.servingsPill}>
+                        <Ionicons name="people-outline" size={13} color={colors.primary} />
+                        <Text style={styles.servingsPillText}>{plan.servings} Servings</Text>
+                      </View>
+                      <Text style={styles.checklistSummaryText}>
+                        <Text style={{ fontWeight: "700", color: colors.ink }}>{toBuy.length} items to buy</Text>
+                        {haveAtHomeCount > 0 && ` • ${haveAtHomeCount} at home`}
+                      </Text>
+                    </View>
                   </View>
 
                   {/* Add to Favorites Button */}
@@ -675,26 +685,15 @@ export default function HomeScreen() {
                   </Pressable>
                 </View>
 
-                {/* Chef cooking note */}
-                {plan.chefNotes ? (
-                  <View style={styles.chefTipBox}>
-                    <Ionicons name="bulb-outline" size={16} color="#E65100" />
-                    <Text style={styles.chefTipText}>{plan.chefNotes}</Text>
-                  </View>
-                ) : null}
-
                 {/* Quick Helper Actions */}
                 <View style={styles.checklistHelperRow}>
-                  <Text style={styles.checklistSummaryText}>
-                    <Text style={{ fontWeight: "700", color: colors.ink }}>{toBuy.length} items to buy</Text>
-                    {haveAtHomeCount > 0 && ` • ${haveAtHomeCount} already at home`}
-                  </Text>
-
                   <View style={{ flexDirection: "row", gap: 8 }}>
                     <Pressable onPress={selectAllItems} style={styles.helperChip}>
+                      <Ionicons name="checkmark-done" size={14} color={colors.ink} />
                       <Text style={styles.helperChipText}>Select All</Text>
                     </Pressable>
                     <Pressable onPress={excludePantryStaples} style={styles.helperChip}>
+                      <Ionicons name="home-outline" size={14} color={colors.ink} />
                       <Text style={styles.helperChipText}>I have spices & oil</Text>
                     </Pressable>
                   </View>
@@ -1010,8 +1009,8 @@ export default function HomeScreen() {
                     />
                     <View style={styles.favoriteItemDetails}>
                       <Text style={styles.favoriteItemTitle}>{fav.title}</Text>
-                      <Text style={styles.favoriteItemSub} numberOfLines={2}>
-                        {fav.culinaryIdeology}
+                      <Text style={styles.favoriteItemSub} numberOfLines={1}>
+                        {fav.dishes && fav.dishes.length > 0 ? fav.dishes.join(", ") : `${fav.ingredients.length} ingredients`}
                       </Text>
                       <Text style={styles.favoriteItemMeta}>
                         {fav.ingredients.length} ingredients • {fav.servings} servings • Saved {fav.savedAt}
@@ -1524,11 +1523,19 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       color: colors.ink,
       letterSpacing: -0.3,
     },
-    recipeIdeology: {
-      fontSize: 13,
-      color: colors.body,
-      marginTop: 4,
-      lineHeight: 18,
+    servingsPill: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      backgroundColor: colors.surfaceTile,
+      paddingVertical: 3,
+      paddingHorizontal: 8,
+      borderRadius: 12,
+    },
+    servingsPillText: {
+      fontSize: 12,
+      fontWeight: "700",
+      color: colors.primary,
     },
     favoriteBtn: {
       flexDirection: "row",
@@ -1550,21 +1557,6 @@ function createStyles(colors: ReturnType<typeof useColors>) {
     favoriteBtnTextActive: {
       color: "#E53935",
       fontWeight: "700",
-    },
-    chefTipBox: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
-      backgroundColor: "#FFF8E1",
-      padding: 10,
-      borderRadius: 12,
-      marginTop: 12,
-    },
-    chefTipText: {
-      flex: 1,
-      fontSize: 12,
-      color: "#F57F17",
-      lineHeight: 16,
     },
     checklistHelperRow: {
       flexDirection: "row",
