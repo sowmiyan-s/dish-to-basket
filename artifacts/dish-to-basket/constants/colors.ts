@@ -53,47 +53,47 @@ const colors = {
     destructiveForeground: '#FFFFFF',
   },
   dark: {
-    // Apple Pro Dark (Museum Obsidian Gallery)
-    canvas: '#0D0D0C',
-    canvasSoft: '#161615',
-    background: '#0D0D0C',
-    card: '#1A1918',
-    surfaceCard: '#1A1918',
-    surfaceTile: '#242322',
-    surfaceStrong: '#2C2B29',
+    // Warm Espresso Obsidian (Rich Foodie & Museum Atmosphere)
+    canvas: '#0A0908',
+    canvasSoft: '#12110F',
+    background: '#0A0908',
+    card: '#161412',
+    surfaceCard: '#161412',
+    surfaceTile: '#201E1A',
+    surfaceStrong: '#2A2723',
 
-    // Ink & Body Typography
-    ink: '#F5F5F7',
-    foreground: '#F5F5F7',
-    body: '#A1A1A6',
-    bodyStrong: '#F5F5F7',
-    muted: '#7A7A7E',
-    mutedForeground: '#7A7A7E',
-    mutedSoft: '#505054',
+    // Ink & Creamy Typography
+    ink: '#FDFBF7',
+    foreground: '#FDFBF7',
+    body: '#BCB6AD',
+    bodyStrong: '#FDFBF7',
+    muted: '#7F7972',
+    mutedForeground: '#7F7972',
+    mutedSoft: '#4E4944',
 
-    // Hairlines
-    hairline: '#282725',
-    hairlineSoft: '#1F1E1D',
-    hairlineStrong: '#3A3936',
-    border: '#282725',
-    input: '#1A1918',
+    // Hairlines & Glass Borders
+    hairline: 'rgba(255, 255, 255, 0.08)',
+    hairlineSoft: 'rgba(255, 255, 255, 0.04)',
+    hairlineStrong: 'rgba(255, 87, 34, 0.28)',
+    border: 'rgba(255, 255, 255, 0.08)',
+    input: '#161412',
 
-    // Gourmet Foodie Primary (Vibrant Saffron Ember on dark)
-    primary: '#FF5722',
-    primaryFocus: '#FF7043',
-    primaryActive: '#F4511E',
+    // Gourmet Foodie Primary (Vibrant Saffron Ember)
+    primary: '#FF5420',
+    primaryFocus: '#FF6F3D',
+    primaryActive: '#E03E0B',
     primaryForeground: '#FFFFFF',
     onPrimary: '#FFFFFF',
 
-    secondary: '#26201D',
-    secondaryForeground: '#F5F5F7',
+    secondary: '#251E1A',
+    secondaryForeground: '#FDFBF7',
     accentGold: '#F59E0B',
-    accentSage: '#4CAF50',
+    accentSage: '#10B981',
 
-    success: '#2EC292',
-    successLight: '#123D2F',
-    successForeground: '#8EF0CD',
-    destructive: '#EF5350',
+    success: '#10B981',
+    successLight: '#0E3324',
+    successForeground: '#6EE7B7',
+    destructive: '#EF4444',
     destructiveForeground: '#FFFFFF',
   },
 

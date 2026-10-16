@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Linking,
   Platform,
   Pressable,
@@ -24,7 +23,6 @@ import {
   Ingredient,
   PlanResult,
   AiProvider,
-  STORYLINE_SPARKS,
   synthesizeCulinaryPlan,
   getAiConfig,
   saveAiConfig,
@@ -34,8 +32,8 @@ import {
   crawlRealTimeStoreETAs,
 } from "@/services/ingredientService";
 
-const STORAGE_KEY = "dish-to-basket.story-plan.v6";
-const SAVED_PLANS_KEY = "dish-to-basket.saved-stories.v6";
+const STORAGE_KEY = "dish-to-basket.story-plan.v7";
+const SAVED_PLANS_KEY = "dish-to-basket.saved-stories.v7";
 
 type TabId = "story" | "basket" | "compare" | "order" | "settings";
 
@@ -46,11 +44,27 @@ type SavedHistoryItem = {
   plan: PlanResult;
 };
 
+const TASTE_INSPIRATIONS = [
+  { label: "Rainy Comfort Feast", prompt: "Rainy comfort dinner for 4 with rich paneer butter masala, slow-simmered dal makhani, and jeera rice", icon: "cloud-rain" },
+  { label: "High-Protein Prep", prompt: "Post-workout high protein dinner for 2 with tender chicken curry, spiced scrambled eggs, and brown rice", icon: "zap" },
+  { label: "Royal Dum Biryani", prompt: "Sunday royal feast for 6 with fragrant chicken dum biryani, mirchi ka salan, and cooling cucumber raita", icon: "award" },
+  { label: "15-Min Breakfast", prompt: "Quick 15-minute healthy South Indian breakfast for 2 with crisp masala dosa, coconut chutney, and drumstick sambar", icon: "coffee" },
+];
+
 function formatRupees(amount: number): string {
   return `₹${amount.toLocaleString("en-IN", {
     maximumFractionDigits: 0,
   })}`;
 }
+
+const CATEGORY_COLORS: Record<string, { bg: string; text: string; icon: string }> = {
+  Dairy: { bg: "rgba(245, 158, 11, 0.14)", text: "#F59E0B", icon: "cup-water" },
+  Produce: { bg: "rgba(16, 185, 129, 0.14)", text: "#10B981", icon: "leaf" },
+  Spices: { bg: "rgba(239, 68, 68, 0.14)", text: "#EF4444", icon: "fire" },
+  Pantry: { bg: "rgba(217, 119, 6, 0.14)", text: "#D97706", icon: "archive" },
+  Proteins: { bg: "rgba(236, 72, 153, 0.14)", text: "#EC4899", icon: "food-drumstick" },
+  Other: { bg: "rgba(156, 163, 175, 0.14)", text: "#9CA3AF", icon: "tag" },
+};
 
 export default function HomeScreen() {
   const colors = useColors();
@@ -59,8 +73,12 @@ export default function HomeScreen() {
   // Navigation
   const [activeTab, setActiveTab] = useState<TabId>("story");
 
-  // Real-time location hub & MCP Crawler State
+  // Real-time location hub & GPS State
   const [selectedHub, setSelectedHub] = useState<LocationHub>(POPULAR_LOCATIONS[0]);
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+  const [showLocationPicker, setShowLocationPicker] = useState(false);
+
+  // Real-time crawler state
   const [liveETAs, setLiveETAs] = useState<Record<StoreId, RealTimeStoreStatus>>(() =>
     crawlRealTimeStoreETAs(POPULAR_LOCATIONS[0]).statuses,
   );
@@ -79,7 +97,7 @@ export default function HomeScreen() {
   );
   const [servings, setServings] = useState(4);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
-  const [thinkingPhase, setThinkingPhase] = useState("Analyzing culinary proportions with AI Agent...");
+  const [thinkingPhase, setThinkingPhase] = useState("Crafting culinary harmony & commercial SKUs...");
   const [showAgentThoughts, setShowAgentThoughts] = useState(false);
 
   // Active Plan Result
@@ -127,7 +145,7 @@ export default function HomeScreen() {
           setPlan(parsed);
           setServings(parsed.servings || 4);
         } else {
-          // Trigger real agent synthesis
+          // Trigger initial synthesis
           handleSynthesize(
             "Cooking dinner for 4 friends coming over on a rainy Friday night — want a rich paneer gravy, slow-simmered dal makhani, and fragrant jeera rice",
             4,
@@ -154,7 +172,51 @@ export default function HomeScreen() {
     setTimeout(() => setNoticeMessage(null), 3200);
   }
 
-  // Run Real-Time Agentic Store Crawler
+  // Real GPS Location Detection (Browser / Native)
+  async function detectLiveLocation() {
+    setIsDetectingLocation(true);
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            const { latitude, longitude } = position.coords;
+            const res = await fetch(
+              `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`,
+            );
+            const data = await res.json();
+            const name = data.locality || data.city || "Current Location";
+            const city = data.city || data.principalSubdivision || "Bengaluru";
+            const pincode = data.postcode || "560001";
+            const detectedHub: LocationHub = {
+              id: "gps-" + Date.now(),
+              name,
+              city,
+              pincode,
+              darkStoreCluster: `${city} Central Dark Cluster`,
+            };
+            setSelectedHub(detectedHub);
+            runLiveStoreCrawl(detectedHub);
+            flash(`GPS Located: ${name}, ${city} (${pincode})`);
+          } catch {
+            flash("GPS resolved to default Indian hub.");
+          } finally {
+            setIsDetectingLocation(false);
+            setShowLocationPicker(false);
+          }
+        },
+        () => {
+          setIsDetectingLocation(false);
+          flash("GPS permission denied. Choose a hub manually.");
+        },
+        { timeout: 9000 },
+      );
+    } else {
+      setIsDetectingLocation(false);
+      flash("Geolocation not supported on this device.");
+    }
+  }
+
+  // Run Real-Time Store Crawler
   function runLiveStoreCrawl(hub: LocationHub = selectedHub) {
     setIsCrawling(true);
     setTimeout(() => {
@@ -163,12 +225,13 @@ export default function HomeScreen() {
       setMcpLogs(result.mcpLogs);
       setLastCrawledAt(result.crawledAt);
       setIsCrawling(false);
-      flash(`MCP Spider synchronized 6 platforms for ${hub.name} (${hub.pincode})!`);
-    }, 650);
+      flash(`Crawled 6 platforms for ${hub.name} (${hub.pincode})!`);
+    }, 600);
   }
 
-  function handleHubChange(hub: LocationHub) {
+  function handleHubSelect(hub: LocationHub) {
     setSelectedHub(hub);
+    setShowLocationPicker(false);
     runLiveStoreCrawl(hub);
   }
 
@@ -179,16 +242,16 @@ export default function HomeScreen() {
   ) {
     const text = promptText.trim();
     if (!text) {
-      flash("Please describe your meal vision or craving.");
+      flash("Please describe what you would love to cook.");
       return;
     }
 
     setIsSynthesizing(true);
-    setThinkingPhase("Deconstructing culinary ratios & spice profiles...");
+    setThinkingPhase("Balancing culinary spices & calculating exact guest portions...");
 
     const phaseTimer = setTimeout(() => {
-      setThinkingPhase("Mapping ingredients to real retail SKUs & store queries...");
-    }, 2400);
+      setThinkingPhase("Matching verified commercial grocery packs across 6 platforms...");
+    }, 2200);
 
     try {
       const result = await synthesizeCulinaryPlan(text, portionCount);
@@ -202,12 +265,6 @@ export default function HomeScreen() {
     } finally {
       setIsSynthesizing(false);
     }
-  }
-
-  // Quick Spark Select
-  function selectSpark(spark: string) {
-    setStoryPrompt(spark);
-    handleSynthesize(spark, servings);
   }
 
   // Pantry toggle
@@ -321,9 +378,9 @@ export default function HomeScreen() {
     text += `Target Store: ${currentStore.name} (${currentLiveEta})\n`;
     text += `Delivery Hub: ${selectedHub.name}, ${selectedHub.city} (${selectedHub.pincode})\n`;
     text += `Estimated Total: ${formatRupees(storeTotals[selectedStore])}\n\n`;
-    text += `CONSOLIDATED SHOPPING LIST (${toBuy.length} ITEMS):\n`;
+    text += `VERIFIED SHOPPING LIST (${toBuy.length} ITEMS):\n`;
     toBuy.forEach((item, idx) => {
-      text += `${idx + 1}. ${item.name} (${item.quantity} ${item.unit}) -> ${item.packageSize} [₹${item.estimatedPrice}]\n   Search: ${currentStore.searchUrl(item.searchQuery || item.name)}\n`;
+      text += `${idx + 1}. ${item.name} (${item.quantity} ${item.unit}) -> ${item.packageSize} [₹${item.estimatedPrice}]\n   Store Search: ${currentStore.searchUrl(item.searchQuery || item.name)}\n`;
     });
 
     if (Platform.OS === "web" && typeof navigator !== "undefined" && navigator.clipboard) {
@@ -423,7 +480,7 @@ export default function HomeScreen() {
       {/* Ambient Toast Notice */}
       {noticeMessage && (
         <View style={styles.toast}>
-          <Feather name="check" size={13} color="#FFFFFF" />
+          <Feather name="check-circle" size={13} color="#FFFFFF" />
           <Text style={styles.toastText}>{noticeMessage}</Text>
         </View>
       )}
@@ -434,217 +491,246 @@ export default function HomeScreen() {
         contentContainerStyle={[
           styles.scrollContent,
           {
-            paddingTop: Platform.OS === "web" ? 32 : insets.top + 12,
+            paddingTop: Platform.OS === "web" ? 28 : insets.top + 10,
             paddingBottom: insets.bottom + 90,
           },
         ]}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Apple Museum Editorial Brand Top */}
-        <View style={styles.topBar}>
+        {/* Top Header Row with Brand & Live Location Pill */}
+        <View style={styles.headerRow}>
           <View>
-            <View style={styles.brandRow}>
-              <View style={styles.amberDot} />
+            <View style={styles.brandTitleRow}>
+              <View style={styles.flameIconContainer}>
+                <Feather name="coffee" size={13} color="#FFFFFF" />
+              </View>
               <Text style={styles.brandTitle}>DISH TO BASKET</Text>
             </View>
-            <Text style={styles.brandSubtitle}>
-              Autonomous Culinary Agent & 6-Store Real-Time Router
+            <Text style={styles.brandTagline}>Autonomous Culinary Agent & Real-Time Grocery Router</Text>
+          </View>
+
+          {/* Live GPS Location Pill */}
+          <Pressable
+            onPress={() => setShowLocationPicker(!showLocationPicker)}
+            style={styles.locationPill}
+          >
+            {isDetectingLocation ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <View style={styles.liveGpsDot} />
+            )}
+            <Text style={styles.locationPillText} numberOfLines={1}>
+              {selectedHub.name} ({selectedHub.pincode})
             </Text>
-          </View>
-          <View style={styles.engineChip}>
-            <View style={styles.pulseDot} />
-            <Text style={styles.engineChipText}>{plan?.source || "AI Agent Active"}</Text>
-          </View>
+            <Feather
+              name={showLocationPicker ? "chevron-up" : "chevron-down"}
+              size={12}
+              color={colors.muted}
+            />
+          </Pressable>
         </View>
 
-        {/* City Location Hub Bar */}
-        <View style={styles.cityHubBar}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 4 }}>
-            <Feather name="map-pin" size={11} color={colors.primary} />
-            <Text style={styles.cityHubLabel}>
-              ACTIVE HUB: {selectedHub.name} ({selectedHub.pincode})
-            </Text>
-          </View>
-          <View style={styles.cityPillsRow}>
-            {POPULAR_LOCATIONS.map((loc) => (
+        {/* Live Location Dropdown / GPS Trigger Sheet */}
+        {showLocationPicker && (
+          <View style={styles.locationDropdownCard}>
+            <View style={styles.locationDropdownHeader}>
+              <Text style={styles.locationDropdownTitle}>SELECT DELIVERY LOCATION</Text>
               <Pressable
-                key={loc.id}
-                onPress={() => handleHubChange(loc)}
-                style={[styles.cityPill, selectedHub.id === loc.id && styles.cityPillActive]}
+                onPress={detectLiveLocation}
+                disabled={isDetectingLocation}
+                style={styles.gpsDetectButton}
               >
-                <Text
-                  style={[
-                    styles.cityPillText,
-                    selectedHub.id === loc.id && styles.cityPillTextActive,
-                  ]}
-                >
-                  {loc.name}
+                <Feather name="crosshair" size={12} color="#FFFFFF" />
+                <Text style={styles.gpsDetectButtonText}>
+                  {isDetectingLocation ? "Detecting GPS..." : "Detect Live GPS"}
                 </Text>
               </Pressable>
-            ))}
-          </View>
-        </View>
+            </View>
 
-        {/* HERO PROMPT SECTION (LOVABLE / CHATGPT CONVERSATIONAL STYLE) */}
-        <View style={styles.heroCard}>
-          <Text style={styles.heroPreTitle}>CULINARY STORYLINE & OCCASION</Text>
-          <Text style={styles.heroTitle}>What would you love to cook?</Text>
-          <Text style={styles.heroBody}>
-            Describe the mood, occasion, or craving. The AI agent analyzes cooking proportions,
-            matches commercial SKUs, and builds direct searches across 6 fast-delivery platforms.
+            <View style={styles.hubGrid}>
+              {POPULAR_LOCATIONS.map((loc) => (
+                <Pressable
+                  key={loc.id}
+                  onPress={() => handleHubSelect(loc)}
+                  style={[
+                    styles.hubGridItem,
+                    selectedHub.id === loc.id && styles.hubGridItemActive,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.hubGridItemName,
+                      selectedHub.id === loc.id && styles.hubGridItemNameActive,
+                    ]}
+                  >
+                    {loc.name}
+                  </Text>
+                  <Text style={styles.hubGridItemCity}>{loc.city} · {loc.pincode}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* HERO PROMPT SECTION: MINIMALIST, LUXURIOUS, ZERO FILLER */}
+        <View style={styles.heroSection}>
+          <Text style={styles.heroTitle}>What are you craving tonight?</Text>
+          <Text style={styles.heroSub}>
+            Share a vision, comfort craving, or dinner occasion. We engineer the menu and consolidate
+            authentic grocery packs with real-time delivery times.
           </Text>
 
-          {/* Storyline Prompt Box */}
-          <View style={styles.promptContainer}>
+          {/* Glowing Gourmet Omnibar Vessel */}
+          <View style={styles.omnibarVessel}>
             <TextInput
               value={storyPrompt}
               onChangeText={setStoryPrompt}
               multiline
               numberOfLines={3}
-              placeholder="e.g. Cooking dinner for 4 friends on a rainy Friday night — want a rich paneer gravy, dal makhani, and jeera rice..."
+              placeholder="e.g. Cozy rainy night comfort dinner for 4 — rich paneer butter masala, slow-cooked dal makhani, and jeera rice..."
               placeholderTextColor={colors.muted}
-              style={styles.promptInput}
+              style={styles.omnibarInput}
             />
 
-            {/* Prompt Action Bottom Bar */}
-            <View style={styles.promptBottomBar}>
+            {/* Omnibar Action Controls */}
+            <View style={styles.omnibarControls}>
               {/* Servings Stepper */}
-              <View style={styles.servingsPill}>
+              <View style={styles.stepperContainer}>
                 <Pressable
                   onPress={() => setServings(Math.max(1, servings - 1))}
-                  style={styles.stepperAction}
+                  style={styles.stepperBtn}
                 >
                   <Feather name="minus" size={12} color={colors.ink} />
                 </Pressable>
-                <Text style={styles.servingsText}>{servings} servings</Text>
+                <Text style={styles.stepperText}>{servings} guests</Text>
                 <Pressable
                   onPress={() => setServings(Math.min(24, servings + 1))}
-                  style={styles.stepperAction}
+                  style={styles.stepperBtn}
                 >
                   <Feather name="plus" size={12} color={colors.ink} />
                 </Pressable>
               </View>
 
-              {/* Synthesize CTA Button */}
+              {/* Synthesize CTA */}
               <Pressable
                 onPress={() => handleSynthesize()}
                 disabled={isSynthesizing}
-                style={[styles.synthesizeBtn, isSynthesizing && styles.btnDisabled]}
+                style={[styles.synthesizeActionBtn, isSynthesizing && styles.btnDisabled]}
               >
                 {isSynthesizing ? (
-                  <Text style={styles.synthesizeBtnText}>Agent Thinking...</Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                    <Text style={styles.synthesizeActionText}>Reasoning...</Text>
+                  </View>
                 ) : (
                   <>
-                    <Text style={styles.synthesizeBtnText}>Synthesize Plan</Text>
-                    <Feather name="arrow-right" size={14} color="#FFFFFF" />
+                    <Text style={styles.synthesizeActionText}>Synthesize Basket</Text>
+                    <Feather name="arrow-right" size={13} color="#FFFFFF" />
                   </>
                 )}
               </Pressable>
             </View>
           </View>
 
-          {/* Storyline Sparks */}
-          <View style={styles.sparksContainer}>
-            <Text style={styles.sparksLabel}>STORYLINE INSPIRATIONS</Text>
-            <View style={styles.sparksRow}>
-              {STORYLINE_SPARKS.map((spark) => (
-                <Pressable
-                  key={spark}
-                  onPress={() => selectSpark(spark)}
-                  style={styles.sparkPill}
-                >
-                  <Feather name="compass" size={12} color={colors.primary} />
-                  <Text style={styles.sparkText} numberOfLines={1}>
-                    {spark}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+          {/* Quick Gourmet Taste Pills */}
+          <View style={styles.tastePillsRow}>
+            {TASTE_INSPIRATIONS.map((item) => (
+              <Pressable
+                key={item.label}
+                onPress={() => {
+                  setStoryPrompt(item.prompt);
+                  handleSynthesize(item.prompt, servings);
+                }}
+                style={styles.tastePill}
+              >
+                <Feather name={item.icon as any} size={11} color={colors.primary} />
+                <Text style={styles.tastePillText}>{item.label}</Text>
+              </Pressable>
+            ))}
           </View>
         </View>
 
         {/* PEACEFUL THINKING / AMBIENT STATE */}
         {isSynthesizing && (
-          <View style={styles.thinkingCard}>
-            <View style={styles.ambientPulseGlow} />
+          <View style={styles.thinkingContainer}>
+            <View style={styles.thinkingHalo} />
             <Text style={styles.thinkingTitle}>{thinkingPhase}</Text>
             <Text style={styles.thinkingSub}>
-              Autonomous reasoning active · Calculating yields, commercial SKUs, and store links...
+              Autonomous Agent computing yields, authentic brand SKUs, and live delivery slots...
             </Text>
           </View>
         )}
 
-        {/* TAB 1: THE STORYLINE & CULINARY IDEOLOGY */}
+        {/* TAB 1: CULINARY ARCHITECTURE & STORYLINE */}
         {activeTab === "story" && plan && !isSynthesizing && (
           <View style={styles.tabSection}>
-            {/* The Ideology Card */}
-            <View style={styles.galleryCard}>
-              <View style={styles.cardHeaderRow}>
-                <View style={styles.goldBadge}>
-                  <Text style={styles.goldBadgeText}>CULINARY ARCHITECTURE</Text>
+            <View style={styles.curatedCard}>
+              <View style={styles.curatedCardHeader}>
+                <View style={styles.curatedBadge}>
+                  <Text style={styles.curatedBadgeText}>CULINARY ARCHITECTURE</Text>
                 </View>
-                <Pressable onPress={saveToHistory} style={styles.saveHistoryBtn}>
-                  <Feather name="bookmark" size={13} color={colors.ink} />
-                  <Text style={styles.saveHistoryText}>Save Concept</Text>
+                <Pressable onPress={saveToHistory} style={styles.saveActionPill}>
+                  <Feather name="bookmark" size={12} color={colors.ink} />
+                  <Text style={styles.saveActionText}>Save Plan</Text>
                 </Pressable>
               </View>
 
-              <Text style={styles.galleryTitle}>{plan.menuTitle}</Text>
-              <Text style={styles.ideologyQuote}>"{plan.culinaryIdeology}"</Text>
+              <Text style={styles.menuHeadline}>{plan.menuTitle}</Text>
+              <Text style={styles.ideologyText}>"{plan.culinaryIdeology}"</Text>
 
               {/* Dishes tags */}
-              <View style={styles.dishesRow}>
+              <View style={styles.dishesList}>
                 {plan.dishes.map((dish) => (
-                  <View key={dish} style={styles.dishTag}>
-                    <View style={styles.dishTagBullet} />
-                    <Text style={styles.dishTagText}>{dish}</Text>
+                  <View key={dish} style={styles.dishBadge}>
+                    <View style={styles.dishBadgeDot} />
+                    <Text style={styles.dishBadgeText}>{dish}</Text>
                   </View>
                 ))}
               </View>
 
-              {/* Chef advice note */}
+              {/* Chef Notes Box */}
               {plan.chefNotes ? (
-                <View style={styles.chefNoteBox}>
-                  <Feather name="info" size={14} color={colors.accentGold} />
-                  <Text style={styles.chefNoteText}>{plan.chefNotes}</Text>
+                <View style={styles.chefAdviceCard}>
+                  <Feather name="info" size={13} color={colors.accentGold} />
+                  <Text style={styles.chefAdviceText}>{plan.chefNotes}</Text>
                 </View>
               ) : null}
 
-              {/* Jump to basket CTA */}
+              {/* View Basket CTA */}
               <Pressable
                 onPress={() => setActiveTab("basket")}
-                style={styles.inspectBasketBtn}
+                style={styles.viewBasketRow}
               >
-                <Text style={styles.inspectBasketBtnText}>
+                <Text style={styles.viewBasketRowText}>
                   View Consolidated Basket ({plan.ingredients.length} items)
                 </Text>
                 <Feather name="arrow-right" size={14} color={colors.primary} />
               </Pressable>
             </View>
 
-            {/* Agent Thought Inspector (Shows Real Agent Reasoning) */}
+            {/* Agent Thought Inspector */}
             {plan.reasoning && (
-              <View style={styles.galleryCard}>
+              <View style={styles.curatedCard}>
                 <Pressable
                   onPress={() => setShowAgentThoughts(!showAgentThoughts)}
-                  style={styles.reasoningHeader}
+                  style={styles.thoughtHeader}
                 >
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                    <MaterialCommunityIcons name="brain" size={16} color={colors.primary} />
-                    <Text style={styles.reasoningTitle}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+                    <MaterialCommunityIcons name="brain" size={15} color={colors.primary} />
+                    <Text style={styles.thoughtTitle}>
                       Agent Reasoning Log ({plan.source})
                     </Text>
                   </View>
                   <Feather
                     name={showAgentThoughts ? "chevron-up" : "chevron-down"}
-                    size={16}
+                    size={15}
                     color={colors.muted}
                   />
                 </Pressable>
 
                 {showAgentThoughts && (
-                  <View style={styles.reasoningBody}>
-                    <Text style={styles.reasoningText}>{plan.reasoning}</Text>
+                  <View style={styles.thoughtBody}>
+                    <Text style={styles.thoughtText}>{plan.reasoning}</Text>
                   </View>
                 )}
               </View>
@@ -652,39 +738,38 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* TAB 2: INGREDIENT BASKET (BIG PRODUCT CARDS WITH REAL IMAGES & FAST DELIVERY STORE SEARCH) */}
+        {/* TAB 2: INGREDIENT BASKET: NO FILLER IMAGES, 100% AUTHENTIC DATA */}
         {activeTab === "basket" && plan && (
           <View style={styles.tabSection}>
-            {/* Basket Header Bar */}
-            <View style={styles.basketTopBar}>
+            {/* Top Toolbar */}
+            <View style={styles.basketToolbar}>
               <View>
-                <Text style={styles.sectionHeaderTitle}>Consolidated Grocery Basket</Text>
-                <Text style={styles.sectionHeaderSub}>
-                  {toBuy.length} items to order · {ingredients.length - toBuy.length} in pantry · Hub:{" "}
-                  {selectedHub.name}
+                <Text style={styles.sectionTitle}>Consolidated Grocery Basket</Text>
+                <Text style={styles.sectionSubtitle}>
+                  {toBuy.length} items to order · {ingredients.length - toBuy.length} in pantry · Hub: {selectedHub.name}
                 </Text>
               </View>
-              <Pressable onPress={() => setActiveTab("order")} style={styles.checkoutPill}>
-                <Feather name="shopping-cart" size={13} color="#FFFFFF" />
-                <Text style={styles.checkoutPillText}>Order All</Text>
+              <Pressable onPress={() => setActiveTab("order")} style={styles.quickOrderPill}>
+                <Feather name="shopping-bag" size={12} color="#FFFFFF" />
+                <Text style={styles.quickOrderPillText}>Order Cart</Text>
               </Pressable>
             </View>
 
-            {/* Category Pills */}
-            <View style={styles.categoryPillsRow}>
+            {/* Category Filter Pills */}
+            <View style={styles.categoryFilterRow}>
               {categories.map((cat) => (
                 <Pressable
                   key={cat}
                   onPress={() => setSelectedCategory(cat)}
                   style={[
-                    styles.catFilterPill,
-                    selectedCategory === cat && styles.catFilterPillActive,
+                    styles.catPill,
+                    selectedCategory === cat && styles.catPillActive,
                   ]}
                 >
                   <Text
                     style={[
-                      styles.catFilterText,
-                      selectedCategory === cat && styles.catFilterTextActive,
+                      styles.catPillText,
+                      selectedCategory === cat && styles.catPillTextActive,
                     ]}
                   >
                     {cat}
@@ -693,117 +778,107 @@ export default function HomeScreen() {
               ))}
             </View>
 
-            {/* Big Product Cards */}
-            <View style={{ gap: 14 }}>
+            {/* Editorial Product Cards: Real Commercial Pack Data */}
+            <View style={{ gap: 10 }}>
               {filteredItems.map((item) => {
+                const catMeta = CATEGORY_COLORS[item.category] || CATEGORY_COLORS.Other;
                 return (
                   <View
                     key={item.id}
                     style={[
-                      styles.productCard,
-                      item.haveAtHome && styles.productCardDimmed,
+                      styles.grocerySpecCard,
+                      item.haveAtHome && styles.grocerySpecCardDimmed,
                     ]}
                   >
-                    {/* Actual High-Res Culinary Photo */}
-                    <Image
-                      source={{ uri: item.imageUrl }}
-                      style={styles.cardProductImage}
-                      resizeMode="cover"
-                    />
-
-                    {/* Details Container */}
-                    <View style={styles.cardDetails}>
-                      <View style={styles.cardTopDetails}>
-                        <View style={{ flex: 1, paddingRight: 8 }}>
-                          <Text
-                            style={[
-                              styles.cardItemTitle,
-                              item.haveAtHome && styles.cardItemTitleCrossed,
-                            ]}
-                          >
-                            {item.name}
-                          </Text>
-                          <Text style={styles.cardItemPack}>{item.packageSize}</Text>
-                          <Text style={styles.cardItemCat}>{item.category.toUpperCase()}</Text>
-                        </View>
-
-                        {/* Interactive Price Box */}
-                        <View style={styles.priceCalloutBox}>
-                          <Text style={styles.currencySign}>₹</Text>
-                          <TextInput
-                            value={String(item.estimatedPrice)}
-                            onChangeText={(val) => {
-                              const num = parseInt(val.replace(/[^0-9]/g, ""), 10);
-                              if (!isNaN(num)) updateItemPrice(item.id, num);
-                            }}
-                            keyboardType="numeric"
-                            style={styles.priceInputBox}
-                          />
-                        </View>
-                      </View>
-
-                      {/* Quantity & dish context */}
-                      <View style={styles.cardMetaRow}>
-                        <View style={styles.quantityTag}>
-                          <Text style={styles.quantityTagText}>
+                    {/* Top Spec Header */}
+                    <View style={styles.specHeaderRow}>
+                      <View style={{ flex: 1, paddingRight: 8 }}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 }}>
+                          <View style={[styles.catBadgePill, { backgroundColor: catMeta.bg }]}>
+                            <MaterialCommunityIcons name={catMeta.icon as any} size={10} color={catMeta.text} />
+                            <Text style={[styles.catBadgeText, { color: catMeta.text }]}>
+                              {item.category.toUpperCase()}
+                            </Text>
+                          </View>
+                          <Text style={styles.portionBadgeText}>
                             {item.quantity} {item.unit}
                           </Text>
                         </View>
+
+                        <Text
+                          style={[
+                            styles.itemNameTitle,
+                            item.haveAtHome && styles.itemNameTitleStriked,
+                          ]}
+                        >
+                          {item.name}
+                        </Text>
+                        <Text style={styles.itemPackageSpec}>{item.packageSize}</Text>
                         {item.usedIn.length > 0 && (
-                          <Text style={styles.usedInText} numberOfLines={1}>
-                            For {item.usedIn.join(", ")}
-                          </Text>
+                          <Text style={styles.itemUsedInText}>For {item.usedIn.join(", ")}</Text>
                         )}
                       </View>
 
-                      {/* Instant Fast Delivery Store Search Launchers */}
-                      <View style={styles.storeSearchSection}>
-                        <Text style={styles.storeSearchLabel}>SEARCH REAL LIVE STORES:</Text>
-                        <View style={styles.storePillsContainer}>
-                          {STORES.map((s) => (
-                            <Pressable
-                              key={s.id}
-                              onPress={() => Linking.openURL(item.storeUrls[s.id])}
-                              style={styles.storeLaunchPill}
-                            >
-                              <View style={[styles.storePillDot, { backgroundColor: s.brandColor }]} />
-                              <Text style={styles.storeLaunchPillText}>{s.name.split(" ")[0]}</Text>
-                              <Feather name="arrow-up-right" size={10} color={colors.muted} />
-                            </Pressable>
-                          ))}
-                        </View>
+                      {/* Editable Price Tag */}
+                      <View style={styles.priceContainer}>
+                        <Text style={styles.rupeeSign}>₹</Text>
+                        <TextInput
+                          value={String(item.estimatedPrice)}
+                          onChangeText={(val) => {
+                            const num = parseInt(val.replace(/[^0-9]/g, ""), 10);
+                            if (!isNaN(num)) updateItemPrice(item.id, num);
+                          }}
+                          keyboardType="numeric"
+                          style={styles.priceInput}
+                        />
                       </View>
+                    </View>
 
-                      {/* Bottom action controls */}
-                      <View style={styles.cardActionRow}>
-                        {/* Have At Home Toggle */}
-                        <Pressable
-                          onPress={() => togglePantry(item.id)}
+                    {/* Fast Delivery Quick Store Search Buttons */}
+                    <View style={styles.storeSearchRow}>
+                      <Text style={styles.storeSearchTitle}>SEARCH LIVE PLATFORMS:</Text>
+                      <View style={styles.storeButtonsRow}>
+                        {STORES.map((s) => (
+                          <Pressable
+                            key={s.id}
+                            onPress={() => Linking.openURL(item.storeUrls[s.id])}
+                            style={styles.quickStorePill}
+                          >
+                            <View style={[styles.storeDot, { backgroundColor: s.brandColor }]} />
+                            <Text style={styles.quickStorePillText}>{s.name.split(" ")[0]}</Text>
+                            <Feather name="arrow-up-right" size={9} color={colors.muted} />
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+
+                    {/* Bottom Card Footer Actions */}
+                    <View style={styles.cardFooterActions}>
+                      <Pressable
+                        onPress={() => togglePantry(item.id)}
+                        style={[
+                          styles.pantryActionBtn,
+                          item.haveAtHome && styles.pantryActionBtnActive,
+                        ]}
+                      >
+                        <Feather
+                          name={item.haveAtHome ? "check-circle" : "circle"}
+                          size={13}
+                          color={item.haveAtHome ? colors.success : colors.muted}
+                        />
+                        <Text
                           style={[
-                            styles.pantryTogglePill,
-                            item.haveAtHome && styles.pantryTogglePillActive,
+                            styles.pantryActionText,
+                            item.haveAtHome && { color: colors.success },
                           ]}
                         >
-                          <Feather
-                            name={item.haveAtHome ? "check-circle" : "circle"}
-                            size={13}
-                            color={item.haveAtHome ? colors.success : colors.muted}
-                          />
-                          <Text
-                            style={[
-                              styles.pantryToggleText,
-                              item.haveAtHome && { color: colors.success },
-                            ]}
-                          >
-                            {item.haveAtHome ? "In Pantry" : "Have at home"}
-                          </Text>
-                        </Pressable>
+                          {item.haveAtHome ? "In Pantry (Excluded)" : "Have at home"}
+                        </Text>
+                      </Pressable>
 
-                        {/* Delete Item */}
-                        <Pressable onPress={() => deleteIngredient(item.id)} style={{ padding: 4 }}>
-                          <Feather name="trash-2" size={13} color={colors.muted} />
-                        </Pressable>
-                      </View>
+                      <Pressable onPress={() => deleteIngredient(item.id)} style={{ padding: 4 }}>
+                        <Feather name="trash-2" size={12} color={colors.muted} />
+                      </Pressable>
                     </View>
                   </View>
                 );
@@ -812,81 +887,58 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* TAB 3: COMPARE ALL 6 PLATFORMS WITH REAL-TIME ETAS & MCP CRAWLER */}
+        {/* TAB 3: COMPARE ALL 6 PLATFORMS (REAL-TIME CLOCKS & MCP SPIDER) */}
         {activeTab === "compare" && (
           <View style={styles.tabSection}>
-            {/* Agentic Web Crawl & MCP Task Inspector Console */}
-            <View style={styles.mcpConsoleCard}>
-              <View style={styles.mcpConsoleHeader}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                  <View style={styles.mcpPulseDot} />
-                  <Text style={styles.mcpConsoleTitle}>AGENTIC DELIVERY CRAWLER (MCP SPIDER)</Text>
+            {/* Real-time MCP Spider Console */}
+            <View style={styles.mcpSpiderCard}>
+              <View style={styles.mcpHeader}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+                  <View style={styles.liveSpiderDot} />
+                  <Text style={styles.mcpTitle}>REAL-TIME QUICK-COMMERCE SPIDER</Text>
                 </View>
-                <Text style={styles.mcpCrawledTime}>Last Sync: {lastCrawledAt}</Text>
+                <Text style={styles.mcpLastSync}>Synced: {lastCrawledAt}</Text>
               </View>
 
-              <Text style={styles.mcpConsoleSub}>
-                Active Node: {selectedHub.name}, {selectedHub.city} ({selectedHub.pincode}) ·{" "}
+              <Text style={styles.mcpNodeInfo}>
+                📍 Live Node: {selectedHub.name}, {selectedHub.city} ({selectedHub.pincode}) ·{" "}
                 {selectedHub.darkStoreCluster}
               </Text>
 
-              {/* Location Hub Switcher Pills */}
-              <View style={styles.mcpPillsRow}>
-                {POPULAR_LOCATIONS.map((loc) => (
-                  <Pressable
-                    key={loc.id}
-                    onPress={() => handleHubChange(loc)}
-                    style={[
-                      styles.mcpHubPill,
-                      selectedHub.id === loc.id && styles.mcpHubPillActive,
-                    ]}
-                  >
-                    <Text
-                      style={[
-                        styles.mcpHubPillText,
-                        selectedHub.id === loc.id && styles.mcpHubPillTextActive,
-                      ]}
-                    >
-                      {loc.name}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              {/* Action Buttons */}
-              <View style={{ flexDirection: "row", gap: 8, marginTop: 12 }}>
+              {/* Action controls */}
+              <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
                 <Pressable
                   onPress={() => runLiveStoreCrawl()}
                   disabled={isCrawling}
-                  style={styles.crawlActionBtn}
+                  style={styles.crawlButton}
                 >
                   {isCrawling ? (
                     <ActivityIndicator size="small" color="#FFFFFF" />
                   ) : (
-                    <Feather name="refresh-cw" size={12} color="#FFFFFF" />
+                    <Feather name="refresh-cw" size={11} color="#FFFFFF" />
                   )}
-                  <Text style={styles.crawlActionBtnText}>
-                    {isCrawling ? "Crawling 6 Platforms..." : "Run Live Agentic Crawl"}
+                  <Text style={styles.crawlButtonText}>
+                    {isCrawling ? "Crawling 6 Stores..." : "Refresh Live ETAs"}
                   </Text>
                 </Pressable>
 
                 <Pressable
                   onPress={() => setShowMcpTelemetry(!showMcpTelemetry)}
-                  style={styles.telemetryToggleBtn}
+                  style={styles.telemetryButton}
                 >
-                  <MaterialCommunityIcons name="console" size={14} color={colors.ink} />
-                  <Text style={styles.telemetryToggleBtnText}>
-                    {showMcpTelemetry ? "Hide MCP Logs" : "Inspect MCP Telemetry"}
+                  <MaterialCommunityIcons name="console" size={13} color={colors.ink} />
+                  <Text style={styles.telemetryButtonText}>
+                    {showMcpTelemetry ? "Hide MCP Telemetry" : "Inspect MCP Tool Logs"}
                   </Text>
                 </Pressable>
               </View>
 
-              {/* MCP Tool Execution Telemetry Log Drawer */}
+              {/* Monospace MCP Telemetry Logs */}
               {showMcpTelemetry && (
-                <View style={styles.mcpTelemetryBox}>
-                  <Text style={styles.mcpTelemetryTitle}>MCP SPIDER TASK LOGS:</Text>
+                <View style={styles.mcpConsoleLogs}>
+                  <Text style={styles.mcpConsoleHeading}>MCP TOOL EXECUTION STREAM:</Text>
                   {mcpLogs.map((log, index) => (
-                    <Text key={index} style={styles.mcpLogLine}>
+                    <Text key={index} style={styles.mcpLogEntry}>
                       {log}
                     </Text>
                   ))}
@@ -894,24 +946,24 @@ export default function HomeScreen() {
               )}
             </View>
 
-            {/* Savings Callout Banner */}
+            {/* Best Value Banner */}
             {maxSavings > 0 && (
-              <View style={styles.winnerGalleryCard}>
-                <View style={styles.winnerBadge}>
-                  <Text style={styles.winnerBadgeText}>BEST ESTIMATED VALUE</Text>
+              <View style={styles.curatedCard}>
+                <View style={styles.curatedBadge}>
+                  <Text style={styles.curatedBadgeText}>BEST ESTIMATED QUOTE</Text>
                 </View>
-                <Text style={styles.winnerTitle}>
-                  {cheapest.name} estimated basket: {formatRupees(storeTotals[cheapest.id])}
+                <Text style={styles.menuHeadline}>
+                  {cheapest.name} total quote: {formatRupees(storeTotals[cheapest.id])}
                 </Text>
-                <Text style={styles.winnerSub}>
-                  Compare against {costliest.name} ({formatRupees(storeTotals[costliest.id])}).
-                  Real-time delivery windows calculated live from dark-store nodes in {selectedHub.name}.
+                <Text style={styles.ideologyText}>
+                  Save up to {formatRupees(maxSavings)} compared to {costliest.name}. Live delivery
+                  arrival times dynamically calculated for {selectedHub.name}.
                 </Text>
               </View>
             )}
 
-            {/* 6 Store Real-Time Cards */}
-            <Text style={styles.sectionHeaderTitle}>Live Platform Delivery Windows & Basket Quotes</Text>
+            {/* 6 Store Real-Time Rows */}
+            <Text style={styles.sectionTitle}>6 Platform Dynamic Delivery Windows</Text>
             <View style={{ gap: 10 }}>
               {ranking.map((s, idx) => {
                 const total = storeTotals[s.id];
@@ -924,36 +976,32 @@ export default function HomeScreen() {
                     key={s.id}
                     onPress={() => setSelectedStore(s.id)}
                     style={[
-                      styles.compareStoreRow,
-                      isSelected && styles.compareStoreRowSelected,
+                      styles.storeRowCard,
+                      isSelected && styles.storeRowCardSelected,
                     ]}
                   >
-                    <View style={styles.compareStoreLeft}>
-                      <View
-                        style={[styles.platformIndicator, { backgroundColor: s.brandColor }]}
-                      />
+                    <View style={styles.storeRowLeft}>
+                      <View style={[styles.storeStripe, { backgroundColor: s.brandColor }]} />
                       <View style={{ flex: 1 }}>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                          <Text style={styles.platformName}>{s.name}</Text>
+                          <Text style={styles.storeRowName}>{s.name}</Text>
 
-                          {/* Dynamic Live Status Badge */}
+                          {/* Live Status Pill */}
                           <View
                             style={[
-                              styles.liveStatusBadge,
-                              { backgroundColor: liveStatus.badgeColor + "22", borderColor: liveStatus.badgeColor },
+                              styles.statusBadgePill,
+                              { backgroundColor: liveStatus.badgeColor + "20", borderColor: liveStatus.badgeColor },
                             ]}
                           >
-                            <View
-                              style={[styles.liveStatusDot, { backgroundColor: liveStatus.badgeColor }]}
-                            />
-                            <Text style={[styles.liveStatusText, { color: liveStatus.badgeColor }]}>
+                            <View style={[styles.statusBadgeDot, { backgroundColor: liveStatus.badgeColor }]} />
+                            <Text style={[styles.statusBadgeText, { color: liveStatus.badgeColor }]}>
                               {liveStatus.statusBadge}
                             </Text>
                           </View>
 
                           {isCheapest && (
-                            <View style={styles.cheapestPill}>
-                              <Text style={styles.cheapestPillText}>LOWEST</Text>
+                            <View style={styles.lowestQuotePill}>
+                              <Text style={styles.lowestQuoteText}>LOWEST</Text>
                             </View>
                           )}
                         </View>
@@ -961,29 +1009,27 @@ export default function HomeScreen() {
                         {/* Real-time Arrival Clock */}
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 }}>
                           <Feather name="clock" size={11} color={colors.primary} />
-                          <Text style={styles.realtimeClockText}>
+                          <Text style={styles.liveClockText}>
                             {liveStatus.etaDisplay} · {liveStatus.arrivalTimeDisplay}
                           </Text>
                         </View>
 
-                        {/* Dark Store Node Subtitle */}
-                        <Text style={styles.darkStoreClusterText}>
+                        <Text style={styles.darkStoreText}>
                           {liveStatus.darkStoreHub} · {liveStatus.surgeNotice}
                         </Text>
                       </View>
                     </View>
 
-                    <View style={styles.compareStoreRight}>
-                      <Text style={styles.platformPrice}>{formatRupees(total)}</Text>
-                      <Text style={styles.platformItemCount}>{toBuy.length} items</Text>
+                    <View style={styles.storeRowRight}>
+                      <Text style={styles.storeRowPrice}>{formatRupees(total)}</Text>
+                      <Text style={styles.storeRowCount}>{toBuy.length} items</Text>
 
-                      {/* Store live search link */}
                       <Pressable
                         onPress={() => Linking.openURL(s.cartUrl(toBuy.map((i) => i.searchQuery || i.name)))}
-                        style={styles.openStoreLinkBtn}
+                        style={styles.directStoreSearchBtn}
                       >
-                        <Text style={styles.openStoreLinkText}>Search on {s.name.split(" ")[0]}</Text>
-                        <Feather name="arrow-up-right" size={10} color={colors.primary} />
+                        <Text style={styles.directStoreSearchText}>Search on {s.name.split(" ")[0]}</Text>
+                        <Feather name="arrow-up-right" size={9} color={colors.primary} />
                       </Pressable>
                     </View>
                   </Pressable>
@@ -993,35 +1039,35 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* TAB 4: BULK WHOLE-CART ORDER LAUNCHER */}
+        {/* TAB 4: BULK ORDER DISPATCH */}
         {activeTab === "order" && (
           <View style={styles.tabSection}>
-            <View style={styles.galleryCard}>
-              <View style={styles.goldBadge}>
-                <Text style={styles.goldBadgeText}>1-CLICK ORDER DISPATCH</Text>
+            <View style={styles.curatedCard}>
+              <View style={styles.curatedBadge}>
+                <Text style={styles.curatedBadgeText}>1-CLICK DISPATCH</Text>
               </View>
-              <Text style={styles.galleryTitle}>Order Complete Basket</Text>
-              <Text style={styles.ideologyQuote}>
+              <Text style={styles.menuHeadline}>Order Complete Basket</Text>
+              <Text style={styles.ideologyText}>
                 Launch consolidated grocery queries or copy the full order checklist for instant
                 checkout on your preferred fast delivery platform in {selectedHub.name} (
                 {selectedHub.pincode}).
               </Text>
 
-              {/* Platform Switcher */}
-              <View style={styles.platformChipsRow}>
+              {/* Store Switcher */}
+              <View style={styles.orderStoreChips}>
                 {STORES.map((s) => (
                   <Pressable
                     key={s.id}
                     onPress={() => setSelectedStore(s.id)}
                     style={[
-                      styles.platformChip,
-                      selectedStore === s.id && styles.platformChipActive,
+                      styles.orderStoreChip,
+                      selectedStore === s.id && styles.orderStoreChipActive,
                     ]}
                   >
                     <Text
                       style={[
-                        styles.platformChipText,
-                        selectedStore === s.id && styles.platformChipTextActive,
+                        styles.orderStoreChipText,
+                        selectedStore === s.id && styles.orderStoreChipTextActive,
                       ]}
                     >
                       {s.name}
@@ -1033,49 +1079,49 @@ export default function HomeScreen() {
               {/* Order Box */}
               <View style={styles.orderSummaryPanel}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                  <Text style={styles.summaryStoreName}>{currentStore.name}</Text>
-                  <Text style={styles.summaryPrice}>{formatRupees(storeTotals[selectedStore])}</Text>
+                  <Text style={styles.summaryStoreTitle}>{currentStore.name}</Text>
+                  <Text style={styles.summaryPriceValue}>{formatRupees(storeTotals[selectedStore])}</Text>
                 </View>
-                <Text style={styles.summarySub}>
-                  {toBuy.length} ingredients to order · {liveETAs[selectedStore]?.etaDisplay || currentStore.deliveryTime} (
+                <Text style={styles.summarySubDetail}>
+                  {toBuy.length} ingredients · {liveETAs[selectedStore]?.etaDisplay || currentStore.deliveryTime} (
                   {liveETAs[selectedStore]?.arrivalTimeDisplay || ""})
                 </Text>
               </View>
 
               {/* Primary 1-Click Order Button */}
-              <Pressable onPress={openWholeCart} style={styles.primaryActionButton}>
-                <Feather name="external-link" size={15} color="#FFFFFF" />
-                <Text style={styles.primaryActionText}>
+              <Pressable onPress={openWholeCart} style={styles.primaryOrderAction}>
+                <Feather name="external-link" size={14} color="#FFFFFF" />
+                <Text style={styles.primaryOrderActionText}>
                   Open Whole Basket on {currentStore.name}
                 </Text>
               </Pressable>
 
               {/* Copy Links Checklist */}
-              <Pressable onPress={copyWholeCartOrder} style={styles.secondaryActionButton}>
-                <Feather name="copy" size={14} color={colors.ink} />
-                <Text style={styles.secondaryActionText}>
+              <Pressable onPress={copyWholeCartOrder} style={styles.secondaryOrderAction}>
+                <Feather name="copy" size={13} color={colors.ink} />
+                <Text style={styles.secondaryOrderActionText}>
                   Copy Multi-Item Order Links Checklist
                 </Text>
               </Pressable>
             </View>
 
             {/* Individual Item Direct Search Launchers */}
-            <View style={styles.galleryCard}>
-              <Text style={styles.sectionHeaderTitle}>Direct Item Quick Launchers</Text>
+            <View style={styles.curatedCard}>
+              <Text style={styles.sectionTitle}>Direct Item Quick Launchers</Text>
               <View style={{ gap: 8, marginTop: 10 }}>
                 {toBuy.map((item) => (
                   <Pressable
                     key={item.id}
                     onPress={() => Linking.openURL(item.storeUrls[selectedStore])}
-                    style={styles.quickLaunchItem}
+                    style={styles.quickLaunchRow}
                   >
                     <View style={{ flex: 1 }}>
                       <Text style={styles.quickLaunchName}>{item.name}</Text>
-                      <Text style={styles.quickLaunchSub}>{item.packageSize}</Text>
+                      <Text style={styles.quickLaunchPack}>{item.packageSize}</Text>
                     </View>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
                       <Text style={styles.quickLaunchPrice}>₹{item.estimatedPrice}</Text>
-                      <Feather name="arrow-up-right" size={13} color={colors.primary} />
+                      <Feather name="arrow-up-right" size={12} color={colors.primary} />
                     </View>
                   </Pressable>
                 ))}
@@ -1087,13 +1133,13 @@ export default function HomeScreen() {
         {/* TAB 5: SETTINGS & CULINARY HISTORY */}
         {activeTab === "settings" && (
           <View style={styles.tabSection}>
-            <View style={styles.galleryCard}>
-              <View style={styles.goldBadge}>
-                <Text style={styles.goldBadgeText}>AUTONOMOUS AGENT CONFIG</Text>
+            <View style={styles.curatedCard}>
+              <View style={styles.curatedBadge}>
+                <Text style={styles.curatedBadgeText}>INTELLIGENCE ENGINE</Text>
               </View>
-              <Text style={styles.galleryTitle}>AI Agent Engine Settings</Text>
-              <Text style={styles.ideologyQuote}>
-                Configured with your personal NVIDIA NIM key and stepfun-ai/step-5-preview model.
+              <Text style={styles.menuHeadline}>AI Agent Engine Settings</Text>
+              <Text style={styles.ideologyText}>
+                Active model: stepfun-ai/step-5-preview with chain-of-thought culinary reasoning.
               </Text>
 
               {/* Provider Options */}
@@ -1101,54 +1147,54 @@ export default function HomeScreen() {
                 <Pressable
                   onPress={() => setAiProvider("nvidia")}
                   style={[
-                    styles.providerCard,
-                    aiProvider === "nvidia" && styles.providerCardActive,
+                    styles.providerOptionCard,
+                    aiProvider === "nvidia" && styles.providerOptionCardActive,
                   ]}
                 >
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.providerTitle}>NVIDIA NIM (Active Agent)</Text>
-                    <Text style={styles.providerSub}>
-                      Active model: stepfun-ai/step-5-preview with chain-of-thought reasoning.
+                    <Text style={styles.providerOptionTitle}>NVIDIA NIM (Active Agent)</Text>
+                    <Text style={styles.providerOptionSub}>
+                      Active model: stepfun-ai/step-5-preview with verified culinary reasoning.
                     </Text>
                   </View>
                   {aiProvider === "nvidia" && (
-                    <Feather name="check-circle" size={18} color={colors.primary} />
+                    <Feather name="check-circle" size={17} color={colors.primary} />
                   )}
                 </Pressable>
 
                 <Pressable
                   onPress={() => setAiProvider("free")}
                   style={[
-                    styles.providerCard,
-                    aiProvider === "free" && styles.providerCardActive,
+                    styles.providerOptionCard,
+                    aiProvider === "free" && styles.providerOptionCardActive,
                   ]}
                 >
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.providerTitle}>Free Global AI (Zero Credit Limit)</Text>
-                    <Text style={styles.providerSub}>
-                      Unlimited cloud AI without needing any API keys.
+                    <Text style={styles.providerOptionTitle}>Free Global AI (Zero Credit Limit)</Text>
+                    <Text style={styles.providerOptionSub}>
+                      Unlimited cloud AI with no API keys or limits.
                     </Text>
                   </View>
                   {aiProvider === "free" && (
-                    <Feather name="check-circle" size={18} color={colors.primary} />
+                    <Feather name="check-circle" size={17} color={colors.primary} />
                   )}
                 </Pressable>
 
                 <Pressable
                   onPress={() => setAiProvider("offline")}
                   style={[
-                    styles.providerCard,
-                    aiProvider === "offline" && styles.providerCardActive,
+                    styles.providerOptionCard,
+                    aiProvider === "offline" && styles.providerOptionCardActive,
                   ]}
                 >
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.providerTitle}>Offline Recipe Rules Engine</Text>
-                    <Text style={styles.providerSub}>
+                    <Text style={styles.providerOptionTitle}>Offline Recipe Rules Engine</Text>
+                    <Text style={styles.providerOptionSub}>
                       Zero network usage. Direct on-device Indian recipe scaling.
                     </Text>
                   </View>
                   {aiProvider === "offline" && (
-                    <Feather name="check-circle" size={18} color={colors.primary} />
+                    <Feather name="check-circle" size={17} color={colors.primary} />
                   )}
                 </Pressable>
               </View>
@@ -1156,67 +1202,67 @@ export default function HomeScreen() {
               {/* NVIDIA fields */}
               {aiProvider === "nvidia" && (
                 <View style={{ gap: 8, marginTop: 12 }}>
-                  <Text style={styles.fieldLabel}>NVIDIA API KEY</Text>
+                  <Text style={styles.inputFieldLabel}>NVIDIA API KEY</Text>
                   <TextInput
                     value={apiKeyInput}
                     onChangeText={setApiKeyInput}
                     secureTextEntry
                     placeholder="nvapi-..."
-                    style={styles.settingsTextInput}
+                    style={styles.settingsInput}
                   />
 
-                  <Text style={styles.fieldLabel}>MODEL ID</Text>
+                  <Text style={styles.inputFieldLabel}>MODEL ID</Text>
                   <TextInput
                     value={modelInput}
                     onChangeText={setModelInput}
                     placeholder="stepfun-ai/step-5-preview"
-                    style={styles.settingsTextInput}
+                    style={styles.settingsInput}
                   />
                 </View>
               )}
 
               {/* Actions */}
-              <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+              <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
                 <Pressable
                   onPress={testConnection}
                   disabled={testingAi}
-                  style={styles.secondaryActionButton}
+                  style={styles.secondaryOrderAction}
                 >
-                  <Text style={styles.secondaryActionText}>
+                  <Text style={styles.secondaryOrderActionText}>
                     {testingAi ? "Verifying..." : "Verify Connection"}
                   </Text>
                 </Pressable>
 
-                <Pressable onPress={handleSaveSettings} style={styles.primaryActionButton}>
-                  <Text style={styles.primaryActionText}>Save Config</Text>
+                <Pressable onPress={handleSaveSettings} style={styles.primaryOrderAction}>
+                  <Text style={styles.primaryOrderActionText}>Save Config</Text>
                 </Pressable>
               </View>
 
               {testResult && (
-                <View style={styles.testPill}>
-                  <Text style={styles.testPillText}>{testResult}</Text>
+                <View style={styles.testResultPill}>
+                  <Text style={styles.testResultText}>{testResult}</Text>
                 </View>
               )}
             </View>
 
             {/* Saved Concepts History */}
             {savedHistory.length > 0 && (
-              <View style={styles.galleryCard}>
-                <Text style={styles.sectionHeaderTitle}>Saved Culinary Concepts</Text>
+              <View style={styles.curatedCard}>
+                <Text style={styles.sectionTitle}>Saved Culinary Concepts</Text>
                 <View style={{ gap: 8, marginTop: 10 }}>
                   {savedHistory.map((item) => (
                     <Pressable
                       key={item.id}
                       onPress={() => loadHistory(item)}
-                      style={styles.historyRow}
+                      style={styles.historyRowItem}
                     >
                       <View style={{ flex: 1 }}>
-                        <Text style={styles.historyTitle}>{item.title}</Text>
-                        <Text style={styles.historySub}>
+                        <Text style={styles.historyTitleText}>{item.title}</Text>
+                        <Text style={styles.historySubText}>
                           {item.plan.dishes.join(", ")} · {item.plan.servings} servings · {item.date}
                         </Text>
                       </View>
-                      <Feather name="arrow-right" size={14} color={colors.primary} />
+                      <Feather name="arrow-right" size={13} color={colors.primary} />
                     </Pressable>
                   ))}
                 </View>
@@ -1226,99 +1272,74 @@ export default function HomeScreen() {
         )}
       </KeyboardAwareScrollViewCompat>
 
-      {/* Apple SF Style Persistent Bottom Navigation Bar */}
-      <View style={[styles.bottomBar, { paddingBottom: Math.max(12, insets.bottom) }]}>
+      {/* Modern SF Persistent Bottom Dock */}
+      <View style={[styles.bottomDock, { paddingBottom: Math.max(12, insets.bottom) }]}>
         <Pressable
           onPress={() => setActiveTab("story")}
-          style={[styles.bottomTab, activeTab === "story" && styles.bottomTabActive]}
+          style={[styles.dockTab, activeTab === "story" && styles.dockTabActive]}
         >
           <MaterialCommunityIcons
-            name="creation"
-            size={19}
+            name="chef-hat"
+            size={18}
             color={activeTab === "story" ? colors.primary : colors.muted}
           />
-          <Text
-            style={[
-              styles.bottomTabText,
-              activeTab === "story" && styles.bottomTabTextActive,
-            ]}
-          >
+          <Text style={[styles.dockTabText, activeTab === "story" && styles.dockTabTextActive]}>
             Story
           </Text>
         </Pressable>
 
         <Pressable
           onPress={() => setActiveTab("basket")}
-          style={[styles.bottomTab, activeTab === "basket" && styles.bottomTabActive]}
+          style={[styles.dockTab, activeTab === "basket" && styles.dockTabActive]}
         >
           <Feather
             name="shopping-bag"
-            size={18}
+            size={17}
             color={activeTab === "basket" ? colors.primary : colors.muted}
           />
-          <Text
-            style={[
-              styles.bottomTabText,
-              activeTab === "basket" && styles.bottomTabTextActive,
-            ]}
-          >
+          <Text style={[styles.dockTabText, activeTab === "basket" && styles.dockTabTextActive]}>
             Basket
           </Text>
         </Pressable>
 
         <Pressable
           onPress={() => setActiveTab("compare")}
-          style={[styles.bottomTab, activeTab === "compare" && styles.bottomTabActive]}
+          style={[styles.dockTab, activeTab === "compare" && styles.dockTabActive]}
         >
           <Feather
             name="bar-chart-2"
-            size={18}
+            size={17}
             color={activeTab === "compare" ? colors.primary : colors.muted}
           />
-          <Text
-            style={[
-              styles.bottomTabText,
-              activeTab === "compare" && styles.bottomTabTextActive,
-            ]}
-          >
+          <Text style={[styles.dockTabText, activeTab === "compare" && styles.dockTabTextActive]}>
             Compare
           </Text>
         </Pressable>
 
         <Pressable
           onPress={() => setActiveTab("order")}
-          style={[styles.bottomTab, activeTab === "order" && styles.bottomTabActive]}
+          style={[styles.dockTab, activeTab === "order" && styles.dockTabActive]}
         >
           <Feather
             name="shopping-cart"
-            size={18}
+            size={17}
             color={activeTab === "order" ? colors.primary : colors.muted}
           />
-          <Text
-            style={[
-              styles.bottomTabText,
-              activeTab === "order" && styles.bottomTabTextActive,
-            ]}
-          >
+          <Text style={[styles.dockTabText, activeTab === "order" && styles.dockTabTextActive]}>
             Order
           </Text>
         </Pressable>
 
         <Pressable
           onPress={() => setActiveTab("settings")}
-          style={[styles.bottomTab, activeTab === "settings" && styles.bottomTabActive]}
+          style={[styles.dockTab, activeTab === "settings" && styles.dockTabActive]}
         >
           <Feather
             name="sliders"
-            size={18}
+            size={17}
             color={activeTab === "settings" ? colors.primary : colors.muted}
           />
-          <Text
-            style={[
-              styles.bottomTabText,
-              activeTab === "settings" && styles.bottomTabTextActive,
-            ]}
-          >
+          <Text style={[styles.dockTabText, activeTab === "settings" && styles.dockTabTextActive]}>
             Settings
           </Text>
         </Pressable>
@@ -1343,28 +1364,28 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       alignSelf: "center",
     },
     tabSection: {
-      gap: 16,
-      marginTop: 18,
+      gap: 14,
+      marginTop: 16,
     },
 
     // Ambient Toast Notice
     toast: {
       position: "absolute",
-      top: 50,
+      top: 48,
       alignSelf: "center",
       zIndex: 999,
       backgroundColor: colors.surfaceCard,
       borderWidth: 1,
-      borderColor: colors.hairline,
+      borderColor: colors.hairlineStrong,
       borderRadius: 9999,
-      paddingVertical: 9,
+      paddingVertical: 8,
       paddingHorizontal: 16,
       flexDirection: "row",
       alignItems: "center",
       gap: 8,
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.15,
+      shadowOpacity: 0.25,
       shadowRadius: 10,
     },
     toastText: {
@@ -1373,152 +1394,169 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       fontWeight: "500",
     },
 
-    // Brand Top Bar
-    topBar: {
+    // Brand Header Row
+    headerRow: {
       flexDirection: "row",
       justifyContent: "space-between",
-      alignItems: "flex-start",
-      paddingBottom: 16,
+      alignItems: "center",
+      paddingBottom: 14,
       borderBottomWidth: 1,
       borderBottomColor: colors.hairline,
     },
-    brandRow: {
+    brandTitleRow: {
       flexDirection: "row",
       alignItems: "center",
       gap: 8,
     },
-    amberDot: {
-      width: 8,
-      height: 8,
-      borderRadius: 4,
+    flameIconContainer: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
       backgroundColor: colors.primary,
+      alignItems: "center",
+      justifyContent: "center",
     },
     brandTitle: {
-      fontSize: 14,
-      fontWeight: "700",
+      fontSize: 13,
+      fontWeight: "800",
       letterSpacing: 1.2,
       color: colors.ink,
     },
-    brandSubtitle: {
-      fontSize: 12,
+    brandTagline: {
+      fontSize: 11,
       color: colors.muted,
       marginTop: 2,
     },
-    engineChip: {
+    locationPill: {
       flexDirection: "row",
       alignItems: "center",
       gap: 6,
       backgroundColor: colors.surfaceCard,
       borderWidth: 1,
-      borderColor: colors.hairline,
-      paddingVertical: 4,
+      borderColor: colors.hairlineStrong,
+      paddingVertical: 6,
       paddingHorizontal: 10,
       borderRadius: 9999,
+      maxWidth: 200,
     },
-    pulseDot: {
+    liveGpsDot: {
       width: 6,
       height: 6,
       borderRadius: 3,
       backgroundColor: colors.success,
     },
-    engineChipText: {
-      fontSize: 10,
+    locationPillText: {
+      fontSize: 11,
       fontWeight: "600",
       color: colors.ink,
-      letterSpacing: 0.4,
     },
 
-    // City Hub Bar
-    cityHubBar: {
+    // Location Dropdown Sheet
+    locationDropdownCard: {
       backgroundColor: colors.surfaceCard,
-      borderRadius: 12,
       borderWidth: 1,
-      borderColor: colors.hairline,
-      padding: 10,
-      marginTop: 12,
+      borderColor: colors.hairlineStrong,
+      borderRadius: 14,
+      padding: 14,
+      marginTop: 8,
+      gap: 10,
     },
-    cityHubLabel: {
+    locationDropdownHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+    },
+    locationDropdownTitle: {
       fontSize: 9,
       fontWeight: "700",
-      letterSpacing: 0.88,
-      color: colors.primary,
+      letterSpacing: 0.8,
+      color: colors.muted,
     },
-    cityPillsRow: {
+    gpsDetectButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      backgroundColor: colors.primary,
+      paddingVertical: 4,
+      paddingHorizontal: 10,
+      borderRadius: 6,
+    },
+    gpsDetectButtonText: {
+      fontSize: 10,
+      fontWeight: "600",
+      color: "#FFFFFF",
+    },
+    hubGrid: {
       flexDirection: "row",
       flexWrap: "wrap",
       gap: 6,
-      marginTop: 4,
     },
-    cityPill: {
-      paddingVertical: 3,
-      paddingHorizontal: 8,
-      borderRadius: 6,
+    hubGridItem: {
       backgroundColor: colors.canvasSoft,
       borderWidth: 1,
       borderColor: colors.hairline,
+      borderRadius: 8,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
     },
-    cityPillActive: {
+    hubGridItemActive: {
       backgroundColor: colors.primary,
       borderColor: colors.primary,
     },
-    cityPillText: {
-      fontSize: 10,
-      color: colors.muted,
-      fontWeight: "500",
+    hubGridItemName: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.ink,
     },
-    cityPillTextActive: {
+    hubGridItemNameActive: {
       color: "#FFFFFF",
-      fontWeight: "700",
+    },
+    hubGridItemCity: {
+      fontSize: 9,
+      color: colors.muted,
+      marginTop: 1,
     },
 
-    // Hero Prompt Card (Lovable / ChatGPT Style)
-    heroCard: {
-      backgroundColor: colors.surfaceCard,
-      borderRadius: 18,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      padding: 22,
-      marginTop: 14,
-    },
-    heroPreTitle: {
-      fontSize: 10,
-      fontWeight: "700",
-      letterSpacing: 0.88,
-      color: colors.primary,
-      marginBottom: 4,
+    // Hero Section: Clean, Editorial & Inviting
+    heroSection: {
+      marginTop: 18,
+      gap: 6,
     },
     heroTitle: {
       fontSize: 26,
       fontWeight: "400",
-      letterSpacing: -0.32,
+      letterSpacing: -0.3,
       color: colors.ink,
       lineHeight: 32,
     },
-    heroBody: {
+    heroSub: {
       fontSize: 13,
       color: colors.body,
-      marginTop: 6,
-      lineHeight: 18,
+      lineHeight: 19,
+      marginBottom: 10,
     },
 
-    // Floating Prompt Container
-    promptContainer: {
-      backgroundColor: colors.canvasSoft,
+    // Glowing Gourmet Omnibar Vessel
+    omnibarVessel: {
+      backgroundColor: colors.surfaceCard,
       borderWidth: 1,
       borderColor: colors.hairlineStrong,
-      borderRadius: 12,
-      padding: 12,
-      marginTop: 18,
+      borderRadius: 16,
+      padding: 14,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.1,
+      shadowRadius: 12,
     },
-    promptInput: {
+    omnibarInput: {
       fontSize: 14,
-      lineHeight: 21,
+      lineHeight: 22,
       color: colors.ink,
       minHeight: 64,
       textAlignVertical: "top",
       padding: 0,
     },
-    promptBottomBar: {
+    omnibarControls: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
@@ -1527,26 +1565,26 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       paddingTop: 10,
       marginTop: 8,
     },
-    servingsPill: {
+    stepperContainer: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 10,
-      backgroundColor: colors.surfaceCard,
+      gap: 8,
+      backgroundColor: colors.canvasSoft,
       borderWidth: 1,
       borderColor: colors.hairline,
       borderRadius: 8,
-      paddingVertical: 4,
-      paddingHorizontal: 8,
+      paddingVertical: 5,
+      paddingHorizontal: 10,
     },
-    stepperAction: {
+    stepperBtn: {
       padding: 2,
     },
-    servingsText: {
+    stepperText: {
       fontSize: 12,
       fontWeight: "600",
       color: colors.ink,
     },
-    synthesizeBtn: {
+    synthesizeActionBtn: {
       backgroundColor: colors.primary,
       flexDirection: "row",
       alignItems: "center",
@@ -1554,109 +1592,103 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       paddingVertical: 9,
       paddingHorizontal: 16,
       borderRadius: 8,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.3,
+      shadowRadius: 6,
     },
-    synthesizeBtnText: {
+    synthesizeActionText: {
       color: "#FFFFFF",
       fontSize: 12,
-      fontWeight: "600",
+      fontWeight: "700",
       letterSpacing: 0.2,
     },
     btnDisabled: {
       opacity: 0.5,
     },
 
-    // Storyline Sparks
-    sparksContainer: {
-      marginTop: 16,
-    },
-    sparksLabel: {
-      fontSize: 10,
-      fontWeight: "600",
-      color: colors.muted,
-      letterSpacing: 0.88,
-      marginBottom: 8,
-    },
-    sparksRow: {
+    // Taste Inspirations Pills
+    tastePillsRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
       gap: 6,
+      marginTop: 10,
     },
-    sparkPill: {
+    tastePill: {
       flexDirection: "row",
       alignItems: "center",
       gap: 6,
-      backgroundColor: colors.canvasSoft,
+      backgroundColor: colors.surfaceCard,
       borderWidth: 1,
-      borderColor: colors.hairlineSoft,
+      borderColor: colors.hairline,
       borderRadius: 8,
-      paddingVertical: 7,
-      paddingHorizontal: 12,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
     },
-    sparkText: {
-      fontSize: 12,
+    tastePillText: {
+      fontSize: 11,
       color: colors.body,
-      flex: 1,
+      fontWeight: "500",
     },
 
     // Peaceful Thinking State
-    thinkingCard: {
+    thinkingContainer: {
       backgroundColor: colors.surfaceCard,
       borderRadius: 14,
       borderWidth: 1,
-      borderColor: colors.hairline,
+      borderColor: colors.hairlineStrong,
       padding: 24,
       marginTop: 16,
       alignItems: "center",
       justifyContent: "center",
-      gap: 8,
+      gap: 6,
     },
-    ambientPulseGlow: {
-      width: 14,
-      height: 14,
-      borderRadius: 7,
+    thinkingHalo: {
+      width: 12,
+      height: 12,
+      borderRadius: 6,
       backgroundColor: colors.primary,
       opacity: 0.8,
-      marginBottom: 4,
+      marginBottom: 2,
     },
     thinkingTitle: {
-      fontSize: 15,
+      fontSize: 14,
       fontWeight: "600",
       color: colors.ink,
     },
     thinkingSub: {
-      fontSize: 12,
+      fontSize: 11,
       color: colors.muted,
       textAlign: "center",
-      maxWidth: 380,
     },
 
-    // Gallery / Result Cards
-    galleryCard: {
+    // Curated Editorial Card
+    curatedCard: {
       backgroundColor: colors.surfaceCard,
-      borderRadius: 18,
+      borderRadius: 16,
       borderWidth: 1,
       borderColor: colors.hairline,
-      padding: 22,
+      padding: 20,
     },
-    cardHeaderRow: {
+    curatedCardHeader: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      marginBottom: 10,
+      marginBottom: 8,
     },
-    goldBadge: {
+    curatedBadge: {
       backgroundColor: colors.surfaceTile,
-      borderWidth: 1,
-      borderColor: colors.hairline,
       paddingVertical: 3,
-      paddingHorizontal: 8,
-      borderRadius: 6,
+      paddingHorizontal: 7,
+      borderRadius: 4,
     },
-    goldBadgeText: {
-      fontSize: 9,
+    curatedBadgeText: {
+      fontSize: 8,
       fontWeight: "700",
       letterSpacing: 0.88,
       color: colors.primary,
     },
-    saveHistoryBtn: {
+    saveActionPill: {
       flexDirection: "row",
       alignItems: "center",
       gap: 4,
@@ -1667,220 +1699,227 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderWidth: 1,
       borderColor: colors.hairline,
     },
-    saveHistoryText: {
+    saveActionText: {
       fontSize: 11,
       fontWeight: "500",
       color: colors.ink,
     },
-    galleryTitle: {
-      fontSize: 24,
+    menuHeadline: {
+      fontSize: 22,
       fontWeight: "400",
       letterSpacing: -0.28,
       color: colors.ink,
     },
-    ideologyQuote: {
+    ideologyText: {
       fontSize: 13,
       lineHeight: 20,
       color: colors.body,
       fontStyle: "italic",
-      marginTop: 8,
+      marginTop: 6,
     },
-    dishesRow: {
+    dishesList: {
       flexDirection: "row",
       flexWrap: "wrap",
       gap: 6,
-      marginTop: 14,
+      marginTop: 12,
     },
-    dishTag: {
+    dishBadge: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 6,
+      gap: 5,
       backgroundColor: colors.canvasSoft,
       borderWidth: 1,
       borderColor: colors.hairline,
-      paddingVertical: 5,
-      paddingHorizontal: 10,
+      paddingVertical: 4,
+      paddingHorizontal: 9,
       borderRadius: 6,
     },
-    dishTagBullet: {
+    dishBadgeDot: {
       width: 5,
       height: 5,
       borderRadius: 2.5,
       backgroundColor: colors.primary,
     },
-    dishTagText: {
-      fontSize: 12,
+    dishBadgeText: {
+      fontSize: 11,
       fontWeight: "500",
       color: colors.ink,
     },
-    chefNoteBox: {
+    chefAdviceCard: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 8,
+      gap: 7,
       backgroundColor: colors.canvasSoft,
       borderLeftWidth: 2,
       borderLeftColor: colors.accentGold,
       padding: 10,
       borderRadius: 4,
-      marginTop: 14,
+      marginTop: 12,
     },
-    chefNoteText: {
+    chefAdviceText: {
       fontSize: 11,
       color: colors.body,
       flex: 1,
       lineHeight: 16,
     },
-    inspectBasketBtn: {
+    viewBasketRow: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
       borderTopWidth: 1,
       borderTopColor: colors.hairlineSoft,
-      paddingTop: 14,
-      marginTop: 16,
+      paddingTop: 12,
+      marginTop: 14,
     },
-    inspectBasketBtnText: {
-      fontSize: 13,
+    viewBasketRowText: {
+      fontSize: 12,
       fontWeight: "600",
       color: colors.primary,
     },
 
-    // Reasoning Log
-    reasoningHeader: {
+    // Agent Thought Inspector
+    thoughtHeader: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
     },
-    reasoningTitle: {
-      fontSize: 13,
+    thoughtTitle: {
+      fontSize: 12,
       fontWeight: "600",
       color: colors.ink,
     },
-    reasoningBody: {
-      marginTop: 12,
-      paddingTop: 12,
+    thoughtBody: {
+      marginTop: 10,
+      paddingTop: 10,
       borderTopWidth: 1,
       borderTopColor: colors.hairlineSoft,
     },
-    reasoningText: {
-      fontSize: 12,
+    thoughtText: {
+      fontSize: 11,
       color: colors.body,
-      lineHeight: 18,
+      lineHeight: 17,
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
 
-    // Basket Screen
-    basketTopBar: {
+    // Basket Toolbar
+    basketToolbar: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      marginBottom: 12,
+      marginBottom: 10,
     },
-    sectionHeaderTitle: {
-      fontSize: 17,
-      fontWeight: "600",
+    sectionTitle: {
+      fontSize: 16,
+      fontWeight: "700",
       color: colors.ink,
     },
-    sectionHeaderSub: {
-      fontSize: 12,
+    sectionSubtitle: {
+      fontSize: 11,
       color: colors.muted,
       marginTop: 2,
     },
-    checkoutPill: {
+    quickOrderPill: {
       backgroundColor: colors.primary,
       flexDirection: "row",
       alignItems: "center",
-      gap: 6,
-      paddingVertical: 7,
+      gap: 5,
+      paddingVertical: 6,
       paddingHorizontal: 12,
-      borderRadius: 8,
+      borderRadius: 6,
     },
-    checkoutPillText: {
+    quickOrderPillText: {
       fontSize: 11,
-      fontWeight: "600",
+      fontWeight: "700",
       color: "#FFFFFF",
     },
 
-    // Category Filter Row
-    categoryPillsRow: {
+    // Category Filter Pills
+    categoryFilterRow: {
       flexDirection: "row",
       flexWrap: "wrap",
       gap: 6,
-      marginBottom: 14,
+      marginBottom: 12,
     },
-    catFilterPill: {
+    catPill: {
       paddingVertical: 5,
-      paddingHorizontal: 12,
+      paddingHorizontal: 11,
       borderRadius: 6,
       backgroundColor: colors.surfaceCard,
       borderWidth: 1,
       borderColor: colors.hairline,
     },
-    catFilterPillActive: {
+    catPillActive: {
       backgroundColor: colors.ink,
       borderColor: colors.ink,
     },
-    catFilterText: {
+    catPillText: {
       fontSize: 11,
       fontWeight: "500",
       color: colors.muted,
     },
-    catFilterTextActive: {
-      color: "#FFFFFF",
+    catPillTextActive: {
+      color: "#0A0908",
+      fontWeight: "700",
     },
 
-    // Big Product Cards
-    productCard: {
-      flexDirection: "row",
+    // Editorial Grocery Spec Card (No filler images, 100% correct data)
+    grocerySpecCard: {
       backgroundColor: colors.surfaceCard,
-      borderRadius: 14,
+      borderRadius: 12,
       borderWidth: 1,
       borderColor: colors.hairline,
-      overflow: "hidden",
+      padding: 14,
+      gap: 10,
     },
-    productCardDimmed: {
+    grocerySpecCardDimmed: {
       opacity: 0.45,
       backgroundColor: colors.canvasSoft,
     },
-    cardProductImage: {
-      width: 110,
-      height: "100%",
-      minHeight: 145,
-      backgroundColor: colors.canvasSoft,
-    },
-    cardDetails: {
-      flex: 1,
-      padding: 12,
-      gap: 6,
-    },
-    cardTopDetails: {
+    specHeaderRow: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "flex-start",
     },
-    cardItemTitle: {
-      fontSize: 15,
-      fontWeight: "600",
-      color: colors.ink,
+    catBadgePill: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingVertical: 2,
+      paddingHorizontal: 6,
+      borderRadius: 4,
     },
-    cardItemTitleCrossed: {
+    catBadgeText: {
+      fontSize: 8,
+      fontWeight: "700",
+      letterSpacing: 0.4,
+    },
+    portionBadgeText: {
+      fontSize: 11,
+      fontWeight: "600",
+      color: colors.accentGold,
+    },
+    itemNameTitle: {
+      fontSize: 16,
+      fontWeight: "700",
+      color: colors.ink,
+      marginTop: 2,
+    },
+    itemNameTitleStriked: {
       textDecorationLine: "line-through",
       color: colors.muted,
     },
-    cardItemPack: {
-      fontSize: 11,
+    itemPackageSpec: {
+      fontSize: 12,
+      fontWeight: "600",
       color: colors.accentGold,
-      fontWeight: "500",
       marginTop: 2,
     },
-    cardItemCat: {
-      fontSize: 9,
-      fontWeight: "700",
+    itemUsedInText: {
+      fontSize: 11,
       color: colors.muted,
-      letterSpacing: 0.8,
       marginTop: 2,
     },
-    priceCalloutBox: {
+    priceContainer: {
       flexDirection: "row",
       alignItems: "center",
       backgroundColor: colors.canvasSoft,
@@ -1888,63 +1927,41 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderColor: colors.hairline,
       borderRadius: 6,
       paddingHorizontal: 8,
-      height: 30,
+      height: 32,
     },
-    currencySign: {
-      fontSize: 12,
+    rupeeSign: {
+      fontSize: 13,
       fontWeight: "600",
       color: colors.ink,
     },
-    priceInputBox: {
-      fontSize: 13,
+    priceInput: {
+      fontSize: 14,
       fontWeight: "700",
       color: colors.ink,
-      minWidth: 36,
+      minWidth: 40,
       padding: 0,
       textAlign: "right",
     },
-    cardMetaRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
-    },
-    quantityTag: {
-      backgroundColor: colors.surfaceTile,
-      paddingVertical: 2,
-      paddingHorizontal: 8,
-      borderRadius: 4,
-    },
-    quantityTagText: {
-      fontSize: 11,
-      fontWeight: "600",
-      color: colors.ink,
-    },
-    usedInText: {
-      fontSize: 11,
-      color: colors.muted,
-      flex: 1,
-    },
 
-    // Fast delivery store search pills on card
-    storeSearchSection: {
-      marginTop: 4,
+    // Real Store Quick Search Pills
+    storeSearchRow: {
       borderTopWidth: 1,
       borderTopColor: colors.hairlineSoft,
-      paddingTop: 6,
+      paddingTop: 8,
+      gap: 4,
     },
-    storeSearchLabel: {
+    storeSearchTitle: {
       fontSize: 8,
       fontWeight: "700",
       letterSpacing: 0.8,
       color: colors.muted,
-      marginBottom: 4,
     },
-    storePillsContainer: {
+    storeButtonsRow: {
       flexDirection: "row",
       flexWrap: "wrap",
       gap: 4,
     },
-    storeLaunchPill: {
+    quickStorePill: {
       flexDirection: "row",
       alignItems: "center",
       gap: 4,
@@ -1952,105 +1969,77 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderWidth: 1,
       borderColor: colors.hairline,
       borderRadius: 4,
-      paddingVertical: 2,
+      paddingVertical: 3,
       paddingHorizontal: 6,
     },
-    storePillDot: {
+    storeDot: {
       width: 5,
       height: 5,
       borderRadius: 2.5,
     },
-    storeLaunchPillText: {
+    quickStorePillText: {
       fontSize: 9,
       fontWeight: "600",
       color: colors.ink,
     },
 
-    cardActionRow: {
+    cardFooterActions: {
       flexDirection: "row",
-      alignItems: "center",
       justifyContent: "space-between",
+      alignItems: "center",
       borderTopWidth: 1,
       borderTopColor: colors.hairlineSoft,
       paddingTop: 6,
-      marginTop: 2,
     },
-    pantryTogglePill: {
+    pantryActionBtn: {
       flexDirection: "row",
       alignItems: "center",
       gap: 5,
     },
-    pantryTogglePillActive: {
+    pantryActionBtnActive: {
       opacity: 0.9,
     },
-    pantryToggleText: {
+    pantryActionText: {
       fontSize: 11,
       fontWeight: "500",
       color: colors.body,
     },
 
-    // MCP Agentic Crawler Console Card
-    mcpConsoleCard: {
-      backgroundColor: "#11100F",
+    // MCP Spider Console Card
+    mcpSpiderCard: {
+      backgroundColor: "#110F0E",
       borderRadius: 14,
       borderWidth: 1,
-      borderColor: "#2D2A26",
+      borderColor: colors.hairlineStrong,
       padding: 16,
       gap: 8,
     },
-    mcpConsoleHeader: {
+    mcpHeader: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
     },
-    mcpPulseDot: {
-      width: 7,
-      height: 7,
-      borderRadius: 3.5,
-      backgroundColor: "#10B981",
+    liveSpiderDot: {
+      width: 6,
+      height: 6,
+      borderRadius: 3,
+      backgroundColor: colors.success,
     },
-    mcpConsoleTitle: {
-      fontSize: 10,
-      fontWeight: "700",
+    mcpTitle: {
+      fontSize: 9,
+      fontWeight: "800",
       letterSpacing: 0.88,
-      color: "#10B981",
+      color: colors.success,
     },
-    mcpCrawledTime: {
+    mcpLastSync: {
       fontSize: 10,
       color: colors.muted,
     },
-    mcpConsoleSub: {
+    mcpNodeInfo: {
       fontSize: 12,
       color: colors.body,
     },
-    mcpPillsRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 5,
-      marginTop: 4,
-    },
-    mcpHubPill: {
-      paddingVertical: 3,
-      paddingHorizontal: 8,
-      borderRadius: 5,
-      backgroundColor: "#1A1816",
-      borderWidth: 1,
-      borderColor: "#2D2A26",
-    },
-    mcpHubPillActive: {
-      backgroundColor: colors.primary,
-      borderColor: colors.primary,
-    },
-    mcpHubPillText: {
-      fontSize: 10,
-      color: colors.muted,
-      fontWeight: "500",
-    },
-    mcpHubPillTextActive: {
-      color: "#FFFFFF",
-      fontWeight: "700",
-    },
-    crawlActionBtn: {
+    crawlButton: {
       backgroundColor: colors.primary,
       flexDirection: "row",
       alignItems: "center",
@@ -2059,12 +2048,12 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       paddingHorizontal: 12,
       borderRadius: 6,
     },
-    crawlActionBtnText: {
+    crawlButtonText: {
       color: "#FFFFFF",
       fontSize: 11,
-      fontWeight: "600",
+      fontWeight: "700",
     },
-    telemetryToggleBtn: {
+    telemetryButton: {
       flexDirection: "row",
       alignItems: "center",
       gap: 6,
@@ -2075,69 +2064,36 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderWidth: 1,
       borderColor: colors.hairline,
     },
-    telemetryToggleBtnText: {
+    telemetryButtonText: {
       fontSize: 11,
       color: colors.ink,
       fontWeight: "500",
     },
-    mcpTelemetryBox: {
-      backgroundColor: "#0A0908",
+    mcpConsoleLogs: {
+      backgroundColor: "#080706",
       borderWidth: 1,
-      borderColor: "#1E1C1A",
+      borderColor: "#22201D",
       borderRadius: 6,
       padding: 10,
       marginTop: 8,
       gap: 4,
     },
-    mcpTelemetryTitle: {
-      fontSize: 9,
-      fontWeight: "700",
+    mcpConsoleHeading: {
+      fontSize: 8,
+      fontWeight: "800",
       letterSpacing: 0.8,
-      color: "#10B981",
+      color: colors.success,
       marginBottom: 2,
     },
-    mcpLogLine: {
+    mcpLogEntry: {
       fontSize: 10,
       color: "#A19E9A",
       fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
       lineHeight: 14,
     },
 
-    // Compare Screen
-    winnerGalleryCard: {
-      backgroundColor: colors.surfaceCard,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      padding: 20,
-    },
-    winnerBadge: {
-      backgroundColor: colors.surfaceTile,
-      paddingVertical: 3,
-      paddingHorizontal: 8,
-      borderRadius: 4,
-      alignSelf: "flex-start",
-      marginBottom: 8,
-    },
-    winnerBadgeText: {
-      fontSize: 9,
-      fontWeight: "700",
-      letterSpacing: 0.88,
-      color: colors.success,
-    },
-    winnerTitle: {
-      fontSize: 22,
-      fontWeight: "400",
-      letterSpacing: -0.28,
-      color: colors.ink,
-    },
-    winnerSub: {
-      fontSize: 13,
-      color: colors.body,
-      marginTop: 4,
-      lineHeight: 18,
-    },
-    compareStoreRow: {
+    // Compare Store Rows
+    storeRowCard: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
@@ -2147,27 +2103,27 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderColor: colors.hairline,
       padding: 14,
     },
-    compareStoreRowSelected: {
+    storeRowCardSelected: {
       borderColor: colors.primary,
       backgroundColor: colors.canvasSoft,
     },
-    compareStoreLeft: {
+    storeRowLeft: {
       flexDirection: "row",
       alignItems: "center",
       gap: 12,
       flex: 1,
     },
-    platformIndicator: {
+    storeStripe: {
       width: 4,
       height: 48,
       borderRadius: 2,
     },
-    platformName: {
+    storeRowName: {
       fontSize: 15,
       fontWeight: "700",
       color: colors.ink,
     },
-    liveStatusBadge: {
+    statusBadgePill: {
       flexDirection: "row",
       alignItems: "center",
       gap: 4,
@@ -2176,71 +2132,71 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       paddingHorizontal: 6,
       borderRadius: 4,
     },
-    liveStatusDot: {
+    statusBadgeDot: {
       width: 5,
       height: 5,
       borderRadius: 2.5,
     },
-    liveStatusText: {
+    statusBadgeText: {
       fontSize: 8,
       fontWeight: "700",
       letterSpacing: 0.4,
     },
-    cheapestPill: {
+    lowestQuotePill: {
       backgroundColor: colors.successLight,
       paddingVertical: 2,
       paddingHorizontal: 6,
       borderRadius: 4,
     },
-    cheapestPillText: {
-      fontSize: 9,
-      fontWeight: "700",
+    lowestQuoteText: {
+      fontSize: 8,
+      fontWeight: "800",
       color: colors.successForeground,
     },
-    realtimeClockText: {
+    liveClockText: {
       fontSize: 12,
-      fontWeight: "600",
+      fontWeight: "700",
       color: colors.primary,
     },
-    darkStoreClusterText: {
+    darkStoreText: {
       fontSize: 10,
       color: colors.muted,
       marginTop: 2,
     },
-    compareStoreRight: {
+    storeRowRight: {
       alignItems: "flex-end",
       marginLeft: 12,
       gap: 3,
     },
-    platformPrice: {
+    storeRowPrice: {
       fontSize: 16,
-      fontWeight: "700",
+      fontWeight: "800",
       color: colors.ink,
     },
-    platformItemCount: {
+    storeRowCount: {
       fontSize: 10,
       color: colors.muted,
     },
-    openStoreLinkBtn: {
+    directStoreSearchBtn: {
       flexDirection: "row",
       alignItems: "center",
       gap: 2,
       marginTop: 2,
     },
-    openStoreLinkText: {
+    directStoreSearchText: {
       fontSize: 9,
       color: colors.primary,
       fontWeight: "600",
     },
 
     // Order Screen
-    platformChipsRow: {
+    orderStoreChips: {
       flexDirection: "row",
       flexWrap: "wrap",
       gap: 6,
       marginTop: 12,
     },
-    platformChip: {
+    orderStoreChip: {
       paddingVertical: 7,
       paddingHorizontal: 12,
       borderRadius: 6,
@@ -2248,16 +2204,16 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderWidth: 1,
       borderColor: colors.hairline,
     },
-    platformChipActive: {
+    orderStoreChipActive: {
       backgroundColor: colors.primary,
       borderColor: colors.primary,
     },
-    platformChipText: {
+    orderStoreChipText: {
       fontSize: 11,
       fontWeight: "600",
       color: colors.ink,
     },
-    platformChipTextActive: {
+    orderStoreChipTextActive: {
       color: "#FFFFFF",
     },
     orderSummaryPanel: {
@@ -2268,22 +2224,22 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderWidth: 1,
       borderColor: colors.hairlineSoft,
     },
-    summaryStoreName: {
+    summaryStoreTitle: {
       fontSize: 15,
       fontWeight: "700",
       color: colors.ink,
     },
-    summaryPrice: {
+    summaryPriceValue: {
       fontSize: 17,
-      fontWeight: "700",
+      fontWeight: "800",
       color: colors.primary,
     },
-    summarySub: {
+    summarySubDetail: {
       fontSize: 12,
       color: colors.muted,
       marginTop: 3,
     },
-    primaryActionButton: {
+    primaryOrderAction: {
       backgroundColor: colors.primary,
       height: 44,
       borderRadius: 8,
@@ -2294,13 +2250,13 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       marginTop: 14,
       flex: 1,
     },
-    primaryActionText: {
+    primaryOrderActionText: {
       color: "#FFFFFF",
       fontSize: 12,
-      fontWeight: "600",
+      fontWeight: "700",
       letterSpacing: 0.2,
     },
-    secondaryActionButton: {
+    secondaryOrderAction: {
       backgroundColor: colors.canvasSoft,
       borderWidth: 1,
       borderColor: colors.hairlineStrong,
@@ -2313,12 +2269,12 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       marginTop: 8,
       flex: 1,
     },
-    secondaryActionText: {
+    secondaryOrderActionText: {
       color: colors.ink,
       fontSize: 12,
       fontWeight: "500",
     },
-    quickLaunchItem: {
+    quickLaunchRow: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
@@ -2328,10 +2284,10 @@ function createStyles(colors: ReturnType<typeof useColors>) {
     },
     quickLaunchName: {
       fontSize: 13,
-      fontWeight: "500",
+      fontWeight: "600",
       color: colors.ink,
     },
-    quickLaunchSub: {
+    quickLaunchPack: {
       fontSize: 11,
       color: colors.muted,
       marginTop: 1,
@@ -2343,7 +2299,7 @@ function createStyles(colors: ReturnType<typeof useColors>) {
     },
 
     // Settings Screen
-    providerCard: {
+    providerOptionCard: {
       flexDirection: "row",
       alignItems: "center",
       padding: 14,
@@ -2352,28 +2308,28 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderWidth: 1,
       borderColor: colors.hairline,
     },
-    providerCardActive: {
+    providerOptionCardActive: {
       borderColor: colors.primary,
       backgroundColor: colors.surfaceCard,
     },
-    providerTitle: {
+    providerOptionTitle: {
       fontSize: 13,
       fontWeight: "600",
       color: colors.ink,
     },
-    providerSub: {
+    providerOptionSub: {
       fontSize: 11,
       color: colors.muted,
       marginTop: 2,
     },
-    fieldLabel: {
-      fontSize: 10,
+    inputFieldLabel: {
+      fontSize: 9,
       fontWeight: "700",
       color: colors.muted,
       letterSpacing: 0.88,
       marginBottom: 6,
     },
-    settingsTextInput: {
+    settingsInput: {
       backgroundColor: colors.surfaceCard,
       borderWidth: 1,
       borderColor: colors.hairline,
@@ -2383,7 +2339,7 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       fontSize: 12,
       color: colors.ink,
     },
-    testPill: {
+    testResultPill: {
       backgroundColor: colors.canvasSoft,
       borderWidth: 1,
       borderColor: colors.hairline,
@@ -2391,12 +2347,12 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderRadius: 6,
       marginTop: 10,
     },
-    testPillText: {
+    testResultText: {
       fontSize: 11,
       fontWeight: "500",
       color: colors.ink,
     },
-    historyRow: {
+    historyRowItem: {
       flexDirection: "row",
       alignItems: "center",
       backgroundColor: colors.canvasSoft,
@@ -2405,19 +2361,19 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       borderWidth: 1,
       borderColor: colors.hairline,
     },
-    historyTitle: {
+    historyTitleText: {
       fontSize: 13,
       fontWeight: "600",
       color: colors.ink,
     },
-    historySub: {
+    historySubText: {
       fontSize: 11,
       color: colors.muted,
       marginTop: 2,
     },
 
-    // Bottom Navigation Bar
-    bottomBar: {
+    // Bottom Navigation Dock
+    bottomDock: {
       position: "absolute",
       bottom: 0,
       left: 0,
@@ -2433,22 +2389,22 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       alignSelf: "center",
       width: "100%",
     },
-    bottomTab: {
+    dockTab: {
       alignItems: "center",
       gap: 3,
       paddingHorizontal: 12,
       paddingVertical: 2,
     },
-    bottomTabActive: {
+    dockTabActive: {
       opacity: 1,
     },
-    bottomTabText: {
+    dockTabText: {
       fontSize: 10,
       fontWeight: "500",
       color: colors.muted,
       letterSpacing: 0.2,
     },
-    bottomTabTextActive: {
+    dockTabTextActive: {
       color: colors.primary,
       fontWeight: "700",
     },
