@@ -7,93 +7,92 @@
 
 const colors = {
   light: {
-    // Canvas & Surfaces (Apple parchment & gallery white)
-    canvas: '#F5F5F7',
+    // Canvas & Surfaces (Google Clean Light Theme)
+    canvas: '#F8F9FA',
     canvasSoft: '#FFFFFF',
-    background: '#F5F5F7',
+    background: '#F8F9FA',
     card: '#FFFFFF',
     surfaceCard: '#FFFFFF',
-    surfaceTile: '#F0F0F2',
-    surfaceStrong: '#E5E5EA',
+    surfaceTile: '#F1F3F4',
+    surfaceStrong: '#E8EAED',
 
-    // Ink & Body Typography
-    ink: '#1D1D1F',
-    foreground: '#1D1D1F',
-    body: '#515154',
-    bodyStrong: '#1D1D1F',
-    muted: '#86868B',
-    mutedForeground: '#86868B',
-    mutedSoft: '#A1A1A6',
+    // Ink & Body Typography (Google Charcoal Ink)
+    ink: '#202124',
+    foreground: '#202124',
+    body: '#3C4043',
+    bodyStrong: '#202124',
+    muted: '#5F6368',
+    mutedForeground: '#5F6368',
+    mutedSoft: '#80868B',
 
-    // Hairlines & Dividers (Apple hairline 1px)
-    hairline: '#E5E5EA',
-    hairlineSoft: '#EBEBF0',
-    hairlineStrong: '#D1D1D6',
-    border: '#E5E5EA',
+    // Hairlines & Borders
+    hairline: '#E8EAED',
+    hairlineSoft: '#F1F3F4',
+    hairlineStrong: '#DADCE0',
+    border: '#E8EAED',
     input: '#FFFFFF',
 
-    // Gourmet Foodie Primary (Saffron Persimmon replacing #0066cc)
-    primary: '#E64A19',
+    // Culinary Foodie Primary (Google Red / Gourmet Coral)
+    primary: '#E53935',
     primaryFocus: '#FF5722',
-    primaryActive: '#BF360C',
+    primaryActive: '#C62828',
     primaryForeground: '#FFFFFF',
     onPrimary: '#FFFFFF',
 
-    // Gourmet Secondary & Accents
-    secondary: '#F5EBE6',
-    secondaryForeground: '#1D1D1F',
-    accentGold: '#D97706',
-    accentSage: '#2E7D32',
+    // Foodie Secondary & Accents
+    secondary: '#FEECEB',
+    secondaryForeground: '#B71C1C',
+    accentGold: '#F9AB00',
+    accentSage: '#1E8E3E',
+    googleBlue: '#1A73E8',
 
-    // Semantic
-    success: '#1F8A65',
-    successLight: '#E8F5EE',
-    successForeground: '#145A42',
-    destructive: '#E53935',
+    // Semantic Statuses
+    success: '#1E8E3E',
+    successLight: '#E6F4EA',
+    successForeground: '#137333',
+    destructive: '#D93025',
     destructiveForeground: '#FFFFFF',
   },
   dark: {
-    // Warm Espresso Obsidian (Rich Foodie & Museum Atmosphere)
-    canvas: '#0A0908',
-    canvasSoft: '#12110F',
-    background: '#0A0908',
-    card: '#161412',
-    surfaceCard: '#161412',
-    surfaceTile: '#201E1A',
-    surfaceStrong: '#2A2723',
+    // Keep consistent with warm high-contrast light surfaces for clear foodie readability
+    canvas: '#F8F9FA',
+    canvasSoft: '#FFFFFF',
+    background: '#F8F9FA',
+    card: '#FFFFFF',
+    surfaceCard: '#FFFFFF',
+    surfaceTile: '#F1F3F4',
+    surfaceStrong: '#E8EAED',
 
-    // Ink & Creamy Typography
-    ink: '#FDFBF7',
-    foreground: '#FDFBF7',
-    body: '#BCB6AD',
-    bodyStrong: '#FDFBF7',
-    muted: '#7F7972',
-    mutedForeground: '#7F7972',
-    mutedSoft: '#4E4944',
+    ink: '#202124',
+    foreground: '#202124',
+    body: '#3C4043',
+    bodyStrong: '#202124',
+    muted: '#5F6368',
+    mutedForeground: '#5F6368',
+    mutedSoft: '#80868B',
 
-    // Hairlines & Glass Borders
-    hairline: 'rgba(255, 255, 255, 0.08)',
-    hairlineSoft: 'rgba(255, 255, 255, 0.04)',
-    hairlineStrong: 'rgba(255, 87, 34, 0.28)',
-    border: 'rgba(255, 255, 255, 0.08)',
-    input: '#161412',
+    hairline: '#E8EAED',
+    hairlineSoft: '#F1F3F4',
+    hairlineStrong: '#DADCE0',
+    border: '#E8EAED',
+    input: '#FFFFFF',
 
-    // Gourmet Foodie Primary (Vibrant Saffron Ember)
-    primary: '#FF5420',
-    primaryFocus: '#FF6F3D',
-    primaryActive: '#E03E0B',
+    primary: '#E53935',
+    primaryFocus: '#FF5722',
+    primaryActive: '#C62828',
     primaryForeground: '#FFFFFF',
     onPrimary: '#FFFFFF',
 
-    secondary: '#251E1A',
-    secondaryForeground: '#FDFBF7',
-    accentGold: '#F59E0B',
-    accentSage: '#10B981',
+    secondary: '#FEECEB',
+    secondaryForeground: '#B71C1C',
+    accentGold: '#F9AB00',
+    accentSage: '#1E8E3E',
+    googleBlue: '#1A73E8',
 
-    success: '#10B981',
-    successLight: '#0E3324',
-    successForeground: '#6EE7B7',
-    destructive: '#EF4444',
+    success: '#1E8E3E',
+    successLight: '#E6F4EA',
+    successForeground: '#137333',
+    destructive: '#D93025',
     destructiveForeground: '#FFFFFF',
   },
 

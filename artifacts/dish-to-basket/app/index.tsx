@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
+  ImageBackground,
   Linking,
   Platform,
   Pressable,
@@ -12,7 +14,7 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Feather, MaterialCommunityIcons, Ionicons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
@@ -30,25 +32,34 @@ import {
   LocationHub,
   POPULAR_LOCATIONS,
   crawlRealTimeStoreETAs,
+  getIngredientImage,
 } from "@/services/ingredientService";
 
-const STORAGE_KEY = "dish-to-basket.story-plan.v7";
-const SAVED_PLANS_KEY = "dish-to-basket.saved-stories.v7";
+const STORAGE_KEY = "dish-to-basket.active-plan.v8";
+const FAVORITES_STORAGE_KEY = "dish-to-basket.favorites.v1";
 
-type TabId = "story" | "basket" | "compare" | "order" | "settings";
+type TabId = "cook" | "buy" | "favorites" | "settings";
 
-type SavedHistoryItem = {
+export type FavoriteDish = {
   id: string;
   title: string;
-  date: string;
-  plan: PlanResult;
+  culinaryIdeology: string;
+  dishes: string[];
+  servings: number;
+  chefNotes: string;
+  ingredients: Ingredient[];
+  savedAt: string;
+  photoUrl: string;
 };
 
-const TASTE_INSPIRATIONS = [
-  { label: "Rainy Comfort Feast", prompt: "Rainy comfort dinner for 4 with rich paneer butter masala, slow-simmered dal makhani, and jeera rice", icon: "cloud-rain" },
-  { label: "High-Protein Prep", prompt: "Post-workout high protein dinner for 2 with tender chicken curry, spiced scrambled eggs, and brown rice", icon: "zap" },
-  { label: "Royal Dum Biryani", prompt: "Sunday royal feast for 6 with fragrant chicken dum biryani, mirchi ka salan, and cooling cucumber raita", icon: "award" },
-  { label: "15-Min Breakfast", prompt: "Quick 15-minute healthy South Indian breakfast for 2 with crisp masala dosa, coconut chutney, and drumstick sambar", icon: "coffee" },
+// Popular everyday dishes for quick 1-tap inspiration
+const POPULAR_DISHES = [
+  { label: "Paneer Butter Masala", prompt: "Rich and creamy Paneer Butter Masala with buttery tomato gravy and warm rotis for 4", icon: "fire" },
+  { label: "Chicken Biryani", prompt: "Royal fragrant Chicken Dum Biryani with aromatic basmati rice, curd raita, and boiled eggs for 4", icon: "award" },
+  { label: "Dal Makhani & Jeera Rice", prompt: "Slow-simmered smoky Dal Makhani with fresh cream, butter, and fluffy Jeera Rice for 4", icon: "heart" },
+  { label: "Masala Dosa & Sambar", prompt: "Crispy South Indian Masala Dosa with spiced potato filling, coconut chutney, and vegetable sambar for 2", icon: "coffee" },
+  { label: "Veg Pulao", prompt: "Fragrant homestyle Vegetable Pulao loaded with carrots, green peas, and whole spices for 4", icon: "leaf" },
+  { label: "Pasta Alfredo", prompt: "Creamy garlic Alfredo Pasta with mushrooms, tender butter herbs, and parmesan for 2", icon: "smile" },
 ];
 
 function formatRupees(amount: number): string {
@@ -58,55 +69,48 @@ function formatRupees(amount: number): string {
 }
 
 const CATEGORY_COLORS: Record<string, { bg: string; text: string; icon: string }> = {
-  Dairy: { bg: "rgba(245, 158, 11, 0.14)", text: "#F59E0B", icon: "cup-water" },
-  Produce: { bg: "rgba(16, 185, 129, 0.14)", text: "#10B981", icon: "leaf" },
-  Spices: { bg: "rgba(239, 68, 68, 0.14)", text: "#EF4444", icon: "fire" },
-  Pantry: { bg: "rgba(217, 119, 6, 0.14)", text: "#D97706", icon: "archive" },
-  Proteins: { bg: "rgba(236, 72, 153, 0.14)", text: "#EC4899", icon: "food-drumstick" },
-  Other: { bg: "rgba(156, 163, 175, 0.14)", text: "#9CA3AF", icon: "tag" },
+  Dairy: { bg: "#FFF4E5", text: "#E65100", icon: "cup-water" },
+  Produce: { bg: "#E8F5E9", text: "#2E7D32", icon: "leaf" },
+  Spices: { bg: "#FFEBEE", text: "#C62828", icon: "fire" },
+  Pantry: { bg: "#FFF8E1", text: "#F57F17", icon: "archive" },
+  Proteins: { bg: "#FCE4EC", text: "#AD1457", icon: "food-drumstick" },
+  Other: { bg: "#F5F5F5", text: "#616161", icon: "tag" },
 };
 
 export default function HomeScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const styles = useMemo(() => createStyles(colors), [colors]);
 
-  // Navigation
-  const [activeTab, setActiveTab] = useState<TabId>("story");
+  // Main Tabs
+  const [activeTab, setActiveTab] = useState<TabId>("cook");
 
-  // Real-time location hub & GPS State
+  // Location State
   const [selectedHub, setSelectedHub] = useState<LocationHub>(POPULAR_LOCATIONS[0]);
   const [isDetectingLocation, setIsDetectingLocation] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
 
-  // Real-time crawler state
+  // Store Pricing & Delivery Times
   const [liveETAs, setLiveETAs] = useState<Record<StoreId, RealTimeStoreStatus>>(() =>
     crawlRealTimeStoreETAs(POPULAR_LOCATIONS[0]).statuses,
   );
-  const [mcpLogs, setMcpLogs] = useState<string[]>(() =>
-    crawlRealTimeStoreETAs(POPULAR_LOCATIONS[0]).mcpLogs,
-  );
-  const [lastCrawledAt, setLastCrawledAt] = useState<string>(() =>
-    crawlRealTimeStoreETAs(POPULAR_LOCATIONS[0]).crawledAt,
-  );
-  const [isCrawling, setIsCrawling] = useState(false);
-  const [showMcpTelemetry, setShowMcpTelemetry] = useState(false);
 
-  // Storyline & Ideology State
-  const [storyPrompt, setStoryPrompt] = useState(
-    "Cooking dinner for 4 friends coming over on a rainy Friday night — want a rich paneer gravy, slow-simmered dal makhani, and fragrant jeera rice",
-  );
+  // Search & Recipe Input
+  const [dishInput, setDishInput] = useState("Paneer Butter Masala & Jeera Rice");
   const [servings, setServings] = useState(4);
-  const [isSynthesizing, setIsSynthesizing] = useState(false);
-  const [thinkingPhase, setThinkingPhase] = useState("Crafting culinary harmony & commercial SKUs...");
-  const [showAgentThoughts, setShowAgentThoughts] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisStep, setAnalysisStep] = useState("Finding fresh ingredients & best store prices...");
 
   // Active Plan Result
   const [plan, setPlan] = useState<PlanResult | null>(null);
 
-  // Filter & Store State
+  // Category & Store Filter
   const [selectedCategory, setSelectedCategory] = useState<string>("All");
   const [selectedStore, setSelectedStore] = useState<StoreId>("blinkit");
   const [noticeMessage, setNoticeMessage] = useState<string | null>(null);
+
+  // Favorites
+  const [favorites, setFavorites] = useState<FavoriteDish[]>([]);
 
   // Settings State
   const [aiProvider, setAiProvider] = useState<AiProvider>("nvidia");
@@ -116,17 +120,14 @@ export default function HomeScreen() {
   const [testingAi, setTestingAi] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
 
-  // Saved History
-  const [savedHistory, setSavedHistory] = useState<SavedHistoryItem[]>([]);
-
-  // Load Initial State
+  // Load Saved Data
   useEffect(() => {
     let active = true;
     async function loadData() {
       try {
-        const [rawPlan, rawHistory, aiCfg] = await Promise.all([
+        const [rawPlan, rawFavs, aiCfg] = await Promise.all([
           AsyncStorage.getItem(STORAGE_KEY),
-          AsyncStorage.getItem(SAVED_PLANS_KEY),
+          AsyncStorage.getItem(FAVORITES_STORAGE_KEY),
           getAiConfig(),
         ]);
         if (!active) return;
@@ -136,20 +137,21 @@ export default function HomeScreen() {
         setBaseUrlInput(aiCfg.baseUrl);
         setModelInput(aiCfg.model);
 
-        if (rawHistory) {
-          setSavedHistory(JSON.parse(rawHistory));
+        if (rawFavs) {
+          try {
+            setFavorites(JSON.parse(rawFavs));
+          } catch {}
         }
 
         if (rawPlan) {
-          const parsed: PlanResult = JSON.parse(rawPlan);
-          setPlan(parsed);
-          setServings(parsed.servings || 4);
+          try {
+            const parsed: PlanResult = JSON.parse(rawPlan);
+            setPlan(parsed);
+            setServings(parsed.servings || 4);
+          } catch {}
         } else {
-          // Trigger initial synthesis
-          handleSynthesize(
-            "Cooking dinner for 4 friends coming over on a rainy Friday night — want a rich paneer gravy, slow-simmered dal makhani, and fragrant jeera rice",
-            4,
-          );
+          // Initialize with standard delicious dish
+          handleAnalyzeDish("Paneer Butter Masala & Jeera Rice", 4);
         }
       } catch {}
     }
@@ -160,7 +162,7 @@ export default function HomeScreen() {
     };
   }, []);
 
-  // Save current plan
+  // Save active plan whenever it changes
   useEffect(() => {
     if (plan) {
       AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(plan)).catch(() => {});
@@ -169,10 +171,10 @@ export default function HomeScreen() {
 
   function flash(msg: string) {
     setNoticeMessage(msg);
-    setTimeout(() => setNoticeMessage(null), 3200);
+    setTimeout(() => setNoticeMessage(null), 3000);
   }
 
-  // Real GPS Location Detection (Browser / Native)
+  // Live Location Detection
   async function detectLiveLocation() {
     setIsDetectingLocation(true);
     if (typeof navigator !== "undefined" && navigator.geolocation) {
@@ -192,13 +194,13 @@ export default function HomeScreen() {
               name,
               city,
               pincode,
-              darkStoreCluster: `${city} Central Dark Cluster`,
+              darkStoreCluster: `${city} Central Cluster`,
             };
             setSelectedHub(detectedHub);
-            runLiveStoreCrawl(detectedHub);
-            flash(`GPS Located: ${name}, ${city} (${pincode})`);
+            updateStoreETAs(detectedHub);
+            flash(`Delivering to ${name}, ${city} (${pincode})`);
           } catch {
-            flash("GPS resolved to default Indian hub.");
+            flash("Location resolved to Bengaluru.");
           } finally {
             setIsDetectingLocation(false);
             setShowLocationPicker(false);
@@ -206,113 +208,159 @@ export default function HomeScreen() {
         },
         () => {
           setIsDetectingLocation(false);
-          flash("GPS permission denied. Choose a hub manually.");
+          flash("GPS permission denied. Please pick an area below.");
         },
-        { timeout: 9000 },
+        { timeout: 8000 },
       );
     } else {
       setIsDetectingLocation(false);
-      flash("Geolocation not supported on this device.");
+      flash("GPS not supported on this browser.");
     }
   }
 
-  // Run Real-Time Store Crawler
-  function runLiveStoreCrawl(hub: LocationHub = selectedHub) {
-    setIsCrawling(true);
-    setTimeout(() => {
-      const result = crawlRealTimeStoreETAs(hub);
-      setLiveETAs(result.statuses);
-      setMcpLogs(result.mcpLogs);
-      setLastCrawledAt(result.crawledAt);
-      setIsCrawling(false);
-      flash(`Crawled 6 platforms for ${hub.name} (${hub.pincode})!`);
-    }, 600);
+  function updateStoreETAs(hub: LocationHub) {
+    const result = crawlRealTimeStoreETAs(hub);
+    setLiveETAs(result.statuses);
   }
 
-  function handleHubSelect(hub: LocationHub) {
+  function handleSelectHub(hub: LocationHub) {
     setSelectedHub(hub);
     setShowLocationPicker(false);
-    runLiveStoreCrawl(hub);
+    updateStoreETAs(hub);
+    flash(`Delivery updated to ${hub.name}, ${hub.city}`);
   }
 
-  // Synthesize Storyline / Ideology Plan using real AI agent
-  async function handleSynthesize(
-    promptText = storyPrompt,
-    portionCount = servings,
-  ) {
-    const text = promptText.trim();
-    if (!text) {
-      flash("Please describe what you would love to cook.");
+  // Analyze Dish & Fetch Ingredients
+  async function handleAnalyzeDish(text = dishInput, guestCount = servings) {
+    const query = text.trim();
+    if (!query) {
+      flash("Please enter what you want to cook!");
       return;
     }
 
-    setIsSynthesizing(true);
-    setThinkingPhase("Balancing culinary spices & calculating exact guest portions...");
-
-    const phaseTimer = setTimeout(() => {
-      setThinkingPhase("Matching verified commercial grocery packs across 6 platforms...");
-    }, 2200);
+    setIsAnalyzing(true);
+    setAnalysisStep("Calculating ingredients & matching live store packs...");
 
     try {
-      const result = await synthesizeCulinaryPlan(text, portionCount);
-      clearTimeout(phaseTimer);
+      const result = await synthesizeCulinaryPlan(query, guestCount);
       setPlan(result);
-      flash(`Synthesized "${result.menuTitle}"`);
-      setActiveTab("story");
+      setActiveTab("cook");
+      flash(`Ingredients ready for "${result.menuTitle}"`);
     } catch (e: any) {
-      clearTimeout(phaseTimer);
-      flash("Synthesis failed: " + e.message);
+      flash("Could not fetch ingredients: " + e.message);
     } finally {
-      setIsSynthesizing(false);
+      setIsAnalyzing(false);
     }
   }
 
-  // Pantry toggle
-  function togglePantry(id: string) {
+  // Toggle item selection (Need to buy vs Have at home)
+  function toggleItemSelection(id: string) {
     if (!plan) return;
     setPlan({
       ...plan,
-      ingredients: plan.ingredients.map((i) =>
-        i.id === id ? { ...i, haveAtHome: !i.haveAtHome } : i,
+      ingredients: plan.ingredients.map((item) =>
+        item.id === id ? { ...item, haveAtHome: !item.haveAtHome } : item,
       ),
     });
   }
 
-  // Custom price edit
-  function updateItemPrice(id: string, priceNum: number) {
+  // Mark all items as needed to buy
+  function selectAllItems() {
     if (!plan) return;
     setPlan({
       ...plan,
-      ingredients: plan.ingredients.map((i) =>
-        i.id === id
-          ? {
-              ...i,
-              estimatedPrice: priceNum,
-              prices: {
-                ...i.prices,
-                [selectedStore]: {
-                  productName: i.searchQuery,
-                  price: String(priceNum),
-                },
-              },
-            }
-          : i,
-      ),
+      ingredients: plan.ingredients.map((item) => ({ ...item, haveAtHome: false })),
     });
+    flash("All ingredients selected for order.");
   }
 
-  // Delete item
-  function deleteIngredient(id: string) {
+  // Mark common pantry spices/oil as "Have at home"
+  function excludePantryStaples() {
     if (!plan) return;
     setPlan({
       ...plan,
-      ingredients: plan.ingredients.filter((i) => i.id !== id),
+      ingredients: plan.ingredients.map((item) => {
+        const cat = item.category;
+        const norm = item.name.toLowerCase();
+        if (cat === "Spices" || norm.includes("oil") || norm.includes("salt") || norm.includes("turmeric")) {
+          return { ...item, haveAtHome: true };
+        }
+        return item;
+      }),
+    });
+    flash("Excluded salt, oil & spices (assumed at home)!");
+  }
+
+  // Delete ingredient
+  function deleteItem(id: string) {
+    if (!plan) return;
+    setPlan({
+      ...plan,
+      ingredients: plan.ingredients.filter((item) => item.id !== id),
     });
   }
 
-  // Cart stats
+  // Favorites Check & Toggle
+  const isFavorited = useMemo(() => {
+    if (!plan) return false;
+    return favorites.some((f) => f.title.toLowerCase() === plan.menuTitle.toLowerCase());
+  }, [plan, favorites]);
+
+  async function toggleFavorite() {
+    if (!plan) return;
+    let updated: FavoriteDish[];
+    if (isFavorited) {
+      updated = favorites.filter((f) => f.title.toLowerCase() !== plan.menuTitle.toLowerCase());
+      flash(`Removed "${plan.menuTitle}" from Favorites.`);
+    } else {
+      const newFav: FavoriteDish = {
+        id: Date.now().toString(),
+        title: plan.menuTitle,
+        culinaryIdeology: plan.culinaryIdeology,
+        dishes: plan.dishes,
+        servings: plan.servings,
+        chefNotes: plan.chefNotes,
+        ingredients: plan.ingredients,
+        savedAt: new Date().toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
+        photoUrl:
+          plan.ingredients[0]?.imageUrl ||
+          getIngredientImage(plan.menuTitle) ||
+          "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&auto=format&fit=crop&q=80",
+      };
+      updated = [newFav, ...favorites];
+      flash(`Added "${plan.menuTitle}" to Favorites ❤️`);
+    }
+    setFavorites(updated);
+    await AsyncStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(updated));
+  }
+
+  function loadFavoriteDish(fav: FavoriteDish) {
+    setPlan({
+      menuTitle: fav.title,
+      culinaryIdeology: fav.culinaryIdeology,
+      dishes: fav.dishes,
+      servings: fav.servings,
+      chefNotes: fav.chefNotes,
+      ingredients: fav.ingredients,
+      source: "favorite",
+    });
+    setDishInput(fav.title);
+    setServings(fav.servings);
+    setActiveTab("cook");
+    flash(`Loaded favorite "${fav.title}"!`);
+  }
+
+  async function removeFavorite(id: string) {
+    const updated = favorites.filter((f) => f.id !== id);
+    setFavorites(updated);
+    await AsyncStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(updated));
+    flash("Removed from Favorites.");
+  }
+
+  // Active items calculation
   const ingredients = plan ? plan.ingredients : [];
-  const toBuy = useMemo(() => ingredients.filter((i) => !i.haveAtHome), [ingredients]);
+  const toBuy = useMemo(() => ingredients.filter((item) => !item.haveAtHome), [ingredients]);
+  const haveAtHomeCount = ingredients.length - toBuy.length;
 
   const categories = useMemo(() => {
     const set = new Set(ingredients.map((i) => i.category));
@@ -324,6 +372,7 @@ export default function HomeScreen() {
     return ingredients.filter((i) => i.category === selectedCategory);
   }, [ingredients, selectedCategory]);
 
+  // Store Pricing Totals
   const storeTotals = useMemo(() => {
     const totals: Record<StoreId, number> = {
       blinkit: 0,
@@ -348,76 +397,53 @@ export default function HomeScreen() {
     return [...STORES].sort((a, b) => storeTotals[a.id] - storeTotals[b.id]);
   }, [storeTotals]);
 
-  const cheapest = ranking[0];
-  const costliest = ranking[ranking.length - 1];
-  const maxSavings = storeTotals[costliest.id] - storeTotals[cheapest.id];
-
+  const cheapestStore = ranking[0];
   const currentStore = STORES.find((s) => s.id === selectedStore) || STORES[0];
 
-  // Whole cart link actions
-  function openWholeCart() {
+  // 1-Click Multi-Search Order
+  function orderOnStore(store = currentStore) {
     const queries = toBuy.map((i) => i.searchQuery || i.name);
     if (queries.length === 0) {
-      flash("No items in cart to order.");
+      flash("No items selected to buy.");
       return;
     }
-    Linking.openURL(currentStore.cartUrl(queries)).catch(() => {
-      Alert.alert("Notice", `Could not launch ${currentStore.name}`);
+    const url = store.cartUrl(queries);
+    Linking.openURL(url).catch(() => {
+      Alert.alert("Notice", `Could not open ${store.name}`);
     });
   }
 
-  async function copyWholeCartOrder() {
+  // Copy Shopping Checklist with Direct Buy Links
+  async function copyShoppingChecklist() {
     if (toBuy.length === 0) {
-      flash("Cart is empty.");
+      flash("No items selected to buy.");
       return;
     }
 
-    const currentLiveEta = liveETAs[selectedStore]?.etaDisplay || currentStore.deliveryTime;
-    let text = `CULINARY PLAN · ${plan?.menuTitle || "DISH TO BASKET"}\n`;
-    text += `Occasion: ${plan?.culinaryIdeology || ""}\n`;
-    text += `Target Store: ${currentStore.name} (${currentLiveEta})\n`;
-    text += `Delivery Hub: ${selectedHub.name}, ${selectedHub.city} (${selectedHub.pincode})\n`;
-    text += `Estimated Total: ${formatRupees(storeTotals[selectedStore])}\n\n`;
-    text += `VERIFIED SHOPPING LIST (${toBuy.length} ITEMS):\n`;
+    const eta = liveETAs[selectedStore]?.etaDisplay || currentStore.deliveryTime;
+    let text = `🛒 GROCERY BASKET: ${plan?.menuTitle || "DISH TO BASKET"}\n`;
+    text += `Servings: ${plan?.servings || servings} People\n`;
+    text += `Target Store: ${currentStore.name} (${eta})\n`;
+    text += `Estimated Total: ${formatRupees(storeTotals[selectedStore])}\n`;
+    text += `Delivery to: ${selectedHub.name}, ${selectedHub.city}\n\n`;
+    text += `ITEMS TO BUY (${toBuy.length}):\n`;
     toBuy.forEach((item, idx) => {
-      text += `${idx + 1}. ${item.name} (${item.quantity} ${item.unit}) -> ${item.packageSize} [₹${item.estimatedPrice}]\n   Store Search: ${currentStore.searchUrl(item.searchQuery || item.name)}\n`;
+      text += `${idx + 1}. ${item.name} (${item.quantity} ${item.unit}) -> ${item.packageSize} [₹${item.estimatedPrice}]\n   Buy Link: ${currentStore.searchUrl(item.searchQuery || item.name)}\n`;
     });
 
     if (Platform.OS === "web" && typeof navigator !== "undefined" && navigator.clipboard) {
       navigator.clipboard.writeText(text);
-      flash(`Copied ${currentStore.name} multi-item cart checklist!`);
+      flash(`Copied shopping checklist for ${currentStore.name}!`);
     } else {
       try {
         await Share.share({ message: text });
       } catch {
-        flash("Could not share cart.");
+        flash("Could not share checklist.");
       }
     }
   }
 
-  // Save to history
-  async function saveToHistory() {
-    if (!plan) return;
-    const item: SavedHistoryItem = {
-      id: Date.now().toString(),
-      title: plan.menuTitle,
-      date: new Date().toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
-      plan,
-    };
-    const updated = [item, ...savedHistory.slice(0, 7)];
-    setSavedHistory(updated);
-    await AsyncStorage.setItem(SAVED_PLANS_KEY, JSON.stringify(updated));
-    flash(`Saved "${plan.menuTitle}" to collection.`);
-  }
-
-  function loadHistory(item: SavedHistoryItem) {
-    setPlan(item.plan);
-    setServings(item.plan.servings);
-    setActiveTab("story");
-    flash(`Restored "${item.title}"`);
-  }
-
-  // AI settings
+  // Settings Save
   async function handleSaveSettings() {
     await saveAiConfig({
       provider: aiProvider,
@@ -425,908 +451,722 @@ export default function HomeScreen() {
       baseUrl: baseUrlInput.trim(),
       model: modelInput.trim(),
     });
-    flash("Agent configuration saved.");
+    flash("Settings saved successfully.");
   }
-
-  async function testConnection() {
-    setTestingAi(true);
-    setTestResult(null);
-    try {
-      if (aiProvider === "free") {
-        const res = await fetch("https://text.pollinations.ai/openai/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "openai",
-            messages: [{ role: "user", content: "ok" }],
-          }),
-        });
-        if (res.ok) setTestResult("Free Global AI is operational.");
-        else setTestResult("Free AI response error.");
-      } else {
-        const res = await fetch(`${baseUrlInput.trim()}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKeyInput.trim()}`,
-          },
-          body: JSON.stringify({
-            model: modelInput.trim(),
-            max_tokens: 100,
-            messages: [{ role: "user", content: "Reply with 'ready'" }],
-          }),
-        });
-        if (res.ok) {
-          const d = await res.json();
-          const mod = d.model || modelInput;
-          setTestResult(`NVIDIA NIM Verified: ${mod} is active & responsive!`);
-        } else {
-          setTestResult(`API error: HTTP ${res.status}`);
-        }
-      }
-    } catch (e: any) {
-      setTestResult("Test error: " + e.message);
-    } finally {
-      setTestingAi(false);
-    }
-  }
-
-  const styles = createStyles(colors);
 
   return (
     <View style={styles.root}>
-      <StatusBar style="light" />
+      <StatusBar style="dark" />
 
-      {/* Ambient Toast Notice */}
+      {/* Floating Notice Toast */}
       {noticeMessage && (
-        <View style={styles.toast}>
-          <Feather name="check-circle" size={13} color="#FFFFFF" />
+        <View style={styles.toastContainer}>
           <Text style={styles.toastText}>{noticeMessage}</Text>
         </View>
       )}
 
-      {/* Main Museum Canvas */}
       <KeyboardAwareScrollViewCompat
         style={styles.scroll}
         contentContainerStyle={[
           styles.scrollContent,
-          {
-            paddingTop: Platform.OS === "web" ? 28 : insets.top + 10,
-            paddingBottom: insets.bottom + 90,
-          },
+          { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 90 },
         ]}
-        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        {/* Top Header Row with Brand & Live Location Pill */}
+        {/* Top Header: Brand & Live Delivery Location Pill */}
         <View style={styles.headerRow}>
           <View>
             <View style={styles.brandTitleRow}>
-              <View style={styles.flameIconContainer}>
-                <Feather name="coffee" size={13} color="#FFFFFF" />
+              <View style={styles.brandIconBadge}>
+                <Ionicons name="restaurant" size={15} color="#FFFFFF" />
               </View>
-              <Text style={styles.brandTitle}>DISH TO BASKET</Text>
+              <Text style={styles.brandTitle}>Dish to Basket</Text>
             </View>
-            <Text style={styles.brandTagline}>Autonomous Culinary Agent & Real-Time Grocery Router</Text>
+            <Text style={styles.brandTagline}>Cook what you crave • Fresh groceries in 10 mins</Text>
           </View>
 
-          {/* Live GPS Location Pill */}
+          {/* Location Chip */}
           <Pressable
             onPress={() => setShowLocationPicker(!showLocationPicker)}
-            style={styles.locationPill}
+            style={styles.locationChip}
           >
             {isDetectingLocation ? (
               <ActivityIndicator size="small" color={colors.primary} />
             ) : (
-              <View style={styles.liveGpsDot} />
+              <Ionicons name="location" size={14} color={colors.primary} />
             )}
-            <Text style={styles.locationPillText} numberOfLines={1}>
-              {selectedHub.name} ({selectedHub.pincode})
+            <Text style={styles.locationChipText} numberOfLines={1}>
+              {selectedHub.name}
             </Text>
             <Feather
               name={showLocationPicker ? "chevron-up" : "chevron-down"}
-              size={12}
+              size={13}
               color={colors.muted}
             />
           </Pressable>
         </View>
 
-        {/* Live Location Dropdown / GPS Trigger Sheet */}
+        {/* Location Dropdown Modal / Picker */}
         {showLocationPicker && (
-          <View style={styles.locationDropdownCard}>
-            <View style={styles.locationDropdownHeader}>
-              <Text style={styles.locationDropdownTitle}>SELECT DELIVERY LOCATION</Text>
+          <View style={styles.locationCard}>
+            <View style={styles.locationCardHeader}>
+              <Text style={styles.locationCardTitle}>Select Delivery Location</Text>
               <Pressable
                 onPress={detectLiveLocation}
                 disabled={isDetectingLocation}
-                style={styles.gpsDetectButton}
+                style={styles.gpsDetectBtn}
               >
-                <Feather name="crosshair" size={12} color="#FFFFFF" />
-                <Text style={styles.gpsDetectButtonText}>
-                  {isDetectingLocation ? "Detecting GPS..." : "Detect Live GPS"}
+                <Feather name="crosshair" size={13} color="#FFFFFF" />
+                <Text style={styles.gpsDetectBtnText}>
+                  {isDetectingLocation ? "Detecting..." : "Use Current GPS"}
                 </Text>
               </Pressable>
             </View>
 
-            <View style={styles.hubGrid}>
+            <View style={styles.locationGrid}>
               {POPULAR_LOCATIONS.map((loc) => (
                 <Pressable
                   key={loc.id}
-                  onPress={() => handleHubSelect(loc)}
+                  onPress={() => handleSelectHub(loc)}
                   style={[
-                    styles.hubGridItem,
-                    selectedHub.id === loc.id && styles.hubGridItemActive,
+                    styles.locationGridItem,
+                    selectedHub.id === loc.id && styles.locationGridItemActive,
                   ]}
                 >
                   <Text
                     style={[
-                      styles.hubGridItemName,
-                      selectedHub.id === loc.id && styles.hubGridItemNameActive,
+                      styles.locationGridItemName,
+                      selectedHub.id === loc.id && styles.locationGridItemNameActive,
                     ]}
                   >
                     {loc.name}
                   </Text>
-                  <Text style={styles.hubGridItemCity}>{loc.city} · {loc.pincode}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {/* HERO PROMPT SECTION: MINIMALIST, LUXURIOUS, ZERO FILLER */}
-        <View style={styles.heroSection}>
-          <Text style={styles.heroTitle}>What are you craving tonight?</Text>
-          <Text style={styles.heroSub}>
-            Share a vision, comfort craving, or dinner occasion. We engineer the menu and consolidate
-            authentic grocery packs with real-time delivery times.
-          </Text>
-
-          {/* Glowing Gourmet Omnibar Vessel */}
-          <View style={styles.omnibarVessel}>
-            <TextInput
-              value={storyPrompt}
-              onChangeText={setStoryPrompt}
-              multiline
-              numberOfLines={3}
-              placeholder="e.g. Cozy rainy night comfort dinner for 4 — rich paneer butter masala, slow-cooked dal makhani, and jeera rice..."
-              placeholderTextColor={colors.muted}
-              style={styles.omnibarInput}
-            />
-
-            {/* Omnibar Action Controls */}
-            <View style={styles.omnibarControls}>
-              {/* Servings Stepper */}
-              <View style={styles.stepperContainer}>
-                <Pressable
-                  onPress={() => setServings(Math.max(1, servings - 1))}
-                  style={styles.stepperBtn}
-                >
-                  <Feather name="minus" size={12} color={colors.ink} />
-                </Pressable>
-                <Text style={styles.stepperText}>{servings} guests</Text>
-                <Pressable
-                  onPress={() => setServings(Math.min(24, servings + 1))}
-                  style={styles.stepperBtn}
-                >
-                  <Feather name="plus" size={12} color={colors.ink} />
-                </Pressable>
-              </View>
-
-              {/* Synthesize CTA */}
-              <Pressable
-                onPress={() => handleSynthesize()}
-                disabled={isSynthesizing}
-                style={[styles.synthesizeActionBtn, isSynthesizing && styles.btnDisabled]}
-              >
-                {isSynthesizing ? (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                    <Text style={styles.synthesizeActionText}>Reasoning...</Text>
-                  </View>
-                ) : (
-                  <>
-                    <Text style={styles.synthesizeActionText}>Synthesize Basket</Text>
-                    <Feather name="arrow-right" size={13} color="#FFFFFF" />
-                  </>
-                )}
-              </Pressable>
-            </View>
-          </View>
-
-          {/* Quick Gourmet Taste Pills */}
-          <View style={styles.tastePillsRow}>
-            {TASTE_INSPIRATIONS.map((item) => (
-              <Pressable
-                key={item.label}
-                onPress={() => {
-                  setStoryPrompt(item.prompt);
-                  handleSynthesize(item.prompt, servings);
-                }}
-                style={styles.tastePill}
-              >
-                <Feather name={item.icon as any} size={11} color={colors.primary} />
-                <Text style={styles.tastePillText}>{item.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-        </View>
-
-        {/* PEACEFUL THINKING / AMBIENT STATE */}
-        {isSynthesizing && (
-          <View style={styles.thinkingContainer}>
-            <View style={styles.thinkingHalo} />
-            <Text style={styles.thinkingTitle}>{thinkingPhase}</Text>
-            <Text style={styles.thinkingSub}>
-              Autonomous Agent computing yields, authentic brand SKUs, and live delivery slots...
-            </Text>
-          </View>
-        )}
-
-        {/* TAB 1: CULINARY ARCHITECTURE & STORYLINE */}
-        {activeTab === "story" && plan && !isSynthesizing && (
-          <View style={styles.tabSection}>
-            <View style={styles.curatedCard}>
-              <View style={styles.curatedCardHeader}>
-                <View style={styles.curatedBadge}>
-                  <Text style={styles.curatedBadgeText}>CULINARY ARCHITECTURE</Text>
-                </View>
-                <Pressable onPress={saveToHistory} style={styles.saveActionPill}>
-                  <Feather name="bookmark" size={12} color={colors.ink} />
-                  <Text style={styles.saveActionText}>Save Plan</Text>
-                </Pressable>
-              </View>
-
-              <Text style={styles.menuHeadline}>{plan.menuTitle}</Text>
-              <Text style={styles.ideologyText}>"{plan.culinaryIdeology}"</Text>
-
-              {/* Dishes tags */}
-              <View style={styles.dishesList}>
-                {plan.dishes.map((dish) => (
-                  <View key={dish} style={styles.dishBadge}>
-                    <View style={styles.dishBadgeDot} />
-                    <Text style={styles.dishBadgeText}>{dish}</Text>
-                  </View>
-                ))}
-              </View>
-
-              {/* Chef Notes Box */}
-              {plan.chefNotes ? (
-                <View style={styles.chefAdviceCard}>
-                  <Feather name="info" size={13} color={colors.accentGold} />
-                  <Text style={styles.chefAdviceText}>{plan.chefNotes}</Text>
-                </View>
-              ) : null}
-
-              {/* View Basket CTA */}
-              <Pressable
-                onPress={() => setActiveTab("basket")}
-                style={styles.viewBasketRow}
-              >
-                <Text style={styles.viewBasketRowText}>
-                  View Consolidated Basket ({plan.ingredients.length} items)
-                </Text>
-                <Feather name="arrow-right" size={14} color={colors.primary} />
-              </Pressable>
-            </View>
-
-            {/* Agent Thought Inspector */}
-            {plan.reasoning && (
-              <View style={styles.curatedCard}>
-                <Pressable
-                  onPress={() => setShowAgentThoughts(!showAgentThoughts)}
-                  style={styles.thoughtHeader}
-                >
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-                    <MaterialCommunityIcons name="brain" size={15} color={colors.primary} />
-                    <Text style={styles.thoughtTitle}>
-                      Agent Reasoning Log ({plan.source})
-                    </Text>
-                  </View>
-                  <Feather
-                    name={showAgentThoughts ? "chevron-up" : "chevron-down"}
-                    size={15}
-                    color={colors.muted}
-                  />
-                </Pressable>
-
-                {showAgentThoughts && (
-                  <View style={styles.thoughtBody}>
-                    <Text style={styles.thoughtText}>{plan.reasoning}</Text>
-                  </View>
-                )}
-              </View>
-            )}
-          </View>
-        )}
-
-        {/* TAB 2: INGREDIENT BASKET: NO FILLER IMAGES, 100% AUTHENTIC DATA */}
-        {activeTab === "basket" && plan && (
-          <View style={styles.tabSection}>
-            {/* Top Toolbar */}
-            <View style={styles.basketToolbar}>
-              <View>
-                <Text style={styles.sectionTitle}>Consolidated Grocery Basket</Text>
-                <Text style={styles.sectionSubtitle}>
-                  {toBuy.length} items to order · {ingredients.length - toBuy.length} in pantry · Hub: {selectedHub.name}
-                </Text>
-              </View>
-              <Pressable onPress={() => setActiveTab("order")} style={styles.quickOrderPill}>
-                <Feather name="shopping-bag" size={12} color="#FFFFFF" />
-                <Text style={styles.quickOrderPillText}>Order Cart</Text>
-              </Pressable>
-            </View>
-
-            {/* Category Filter Pills */}
-            <View style={styles.categoryFilterRow}>
-              {categories.map((cat) => (
-                <Pressable
-                  key={cat}
-                  onPress={() => setSelectedCategory(cat)}
-                  style={[
-                    styles.catPill,
-                    selectedCategory === cat && styles.catPillActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.catPillText,
-                      selectedCategory === cat && styles.catPillTextActive,
-                    ]}
-                  >
-                    {cat}
+                  <Text style={styles.locationGridItemCity}>
+                    {loc.city} ({loc.pincode})
                   </Text>
                 </Pressable>
               ))}
             </View>
+          </View>
+        )}
 
-            {/* Editorial Product Cards: Real Commercial Pack Data */}
-            <View style={{ gap: 10 }}>
-              {filteredItems.map((item) => {
-                const catMeta = CATEGORY_COLORS[item.category] || CATEGORY_COLORS.Other;
-                return (
-                  <View
-                    key={item.id}
-                    style={[
-                      styles.grocerySpecCard,
-                      item.haveAtHome && styles.grocerySpecCardDimmed,
-                    ]}
-                  >
-                    {/* Top Spec Header */}
-                    <View style={styles.specHeaderRow}>
-                      <View style={{ flex: 1, paddingRight: 8 }}>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 2 }}>
-                          <View style={[styles.catBadgePill, { backgroundColor: catMeta.bg }]}>
-                            <MaterialCommunityIcons name={catMeta.icon as any} size={10} color={catMeta.text} />
-                            <Text style={[styles.catBadgeText, { color: catMeta.text }]}>
-                              {item.category.toUpperCase()}
-                            </Text>
-                          </View>
-                          <Text style={styles.portionBadgeText}>
-                            {item.quantity} {item.unit}
-                          </Text>
-                        </View>
+        {/* TAB 1: COOK & INGREDIENTS (Main Screen) */}
+        {activeTab === "cook" && (
+          <View style={styles.tabSection}>
+            {/* Grand Culinary Hero Banner with Food Photo */}
+            <ImageBackground
+              source={{
+                uri: "https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=1200&auto=format&fit=crop&q=80",
+              }}
+              style={styles.heroBanner}
+              imageStyle={styles.heroBannerImage}
+            >
+              <View style={styles.heroOverlay}>
+                <Text style={styles.heroGreeting}>What do you want to cook today?</Text>
+                <Text style={styles.heroSub}>
+                  Type any recipe or meal. We'll find all the fresh ingredients with photos and show you the best store prices.
+                </Text>
 
-                        <Text
-                          style={[
-                            styles.itemNameTitle,
-                            item.haveAtHome && styles.itemNameTitleStriked,
-                          ]}
-                        >
-                          {item.name}
-                        </Text>
-                        <Text style={styles.itemPackageSpec}>{item.packageSize}</Text>
-                        {item.usedIn.length > 0 && (
-                          <Text style={styles.itemUsedInText}>For {item.usedIn.join(", ")}</Text>
-                        )}
-                      </View>
+                {/* Input Search Box */}
+                <View style={styles.inputCard}>
+                  <View style={styles.inputRow}>
+                    <Feather name="search" size={18} color={colors.primary} style={{ marginTop: 2 }} />
+                    <TextInput
+                      value={dishInput}
+                      onChangeText={setDishInput}
+                      placeholder="e.g. Paneer Butter Masala, Chicken Biryani, Dal Makhani..."
+                      placeholderTextColor={colors.muted}
+                      style={styles.searchInput}
+                      returnKeyType="search"
+                      onSubmitEditing={() => handleAnalyzeDish()}
+                    />
+                  </View>
 
-                      {/* Editable Price Tag */}
-                      <View style={styles.priceContainer}>
-                        <Text style={styles.rupeeSign}>₹</Text>
-                        <TextInput
-                          value={String(item.estimatedPrice)}
-                          onChangeText={(val) => {
-                            const num = parseInt(val.replace(/[^0-9]/g, ""), 10);
-                            if (!isNaN(num)) updateItemPrice(item.id, num);
-                          }}
-                          keyboardType="numeric"
-                          style={styles.priceInput}
-                        />
-                      </View>
-                    </View>
-
-                    {/* Fast Delivery Quick Store Search Buttons */}
-                    <View style={styles.storeSearchRow}>
-                      <Text style={styles.storeSearchTitle}>SEARCH LIVE PLATFORMS:</Text>
-                      <View style={styles.storeButtonsRow}>
-                        {STORES.map((s) => (
-                          <Pressable
-                            key={s.id}
-                            onPress={() => Linking.openURL(item.storeUrls[s.id])}
-                            style={styles.quickStorePill}
-                          >
-                            <View style={[styles.storeDot, { backgroundColor: s.brandColor }]} />
-                            <Text style={styles.quickStorePillText}>{s.name.split(" ")[0]}</Text>
-                            <Feather name="arrow-up-right" size={9} color={colors.muted} />
-                          </Pressable>
-                        ))}
-                      </View>
-                    </View>
-
-                    {/* Bottom Card Footer Actions */}
-                    <View style={styles.cardFooterActions}>
+                  {/* Servings Stepper & Action Button */}
+                  <View style={styles.inputControlsRow}>
+                    <View style={styles.servingsStepper}>
                       <Pressable
-                        onPress={() => togglePantry(item.id)}
-                        style={[
-                          styles.pantryActionBtn,
-                          item.haveAtHome && styles.pantryActionBtnActive,
-                        ]}
+                        onPress={() => setServings(Math.max(1, servings - 1))}
+                        style={styles.stepperButton}
                       >
-                        <Feather
-                          name={item.haveAtHome ? "check-circle" : "circle"}
-                          size={13}
-                          color={item.haveAtHome ? colors.success : colors.muted}
-                        />
-                        <Text
-                          style={[
-                            styles.pantryActionText,
-                            item.haveAtHome && { color: colors.success },
-                          ]}
-                        >
-                          {item.haveAtHome ? "In Pantry (Excluded)" : "Have at home"}
-                        </Text>
+                        <Feather name="minus" size={13} color={colors.ink} />
                       </Pressable>
-
-                      <Pressable onPress={() => deleteIngredient(item.id)} style={{ padding: 4 }}>
-                        <Feather name="trash-2" size={12} color={colors.muted} />
+                      <Text style={styles.servingsText}>{servings} People</Text>
+                      <Pressable
+                        onPress={() => setServings(Math.min(20, servings + 1))}
+                        style={styles.stepperButton}
+                      >
+                        <Feather name="plus" size={13} color={colors.ink} />
                       </Pressable>
                     </View>
+
+                    <Pressable
+                      onPress={() => handleAnalyzeDish()}
+                      disabled={isAnalyzing}
+                      style={[styles.findIngredientsBtn, isAnalyzing && styles.btnDisabled]}
+                    >
+                      {isAnalyzing ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                          <ActivityIndicator size="small" color="#FFFFFF" />
+                          <Text style={styles.findIngredientsBtnText}>Finding...</Text>
+                        </View>
+                      ) : (
+                        <>
+                          <Text style={styles.findIngredientsBtnText}>Find Ingredients</Text>
+                          <Feather name="arrow-right" size={14} color="#FFFFFF" />
+                        </>
+                      )}
+                    </Pressable>
                   </View>
-                );
-              })}
-            </View>
-          </View>
-        )}
-
-        {/* TAB 3: COMPARE ALL 6 PLATFORMS (REAL-TIME CLOCKS & MCP SPIDER) */}
-        {activeTab === "compare" && (
-          <View style={styles.tabSection}>
-            {/* Real-time MCP Spider Console */}
-            <View style={styles.mcpSpiderCard}>
-              <View style={styles.mcpHeader}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-                  <View style={styles.liveSpiderDot} />
-                  <Text style={styles.mcpTitle}>REAL-TIME QUICK-COMMERCE SPIDER</Text>
                 </View>
-                <Text style={styles.mcpLastSync}>Synced: {lastCrawledAt}</Text>
-              </View>
 
-              <Text style={styles.mcpNodeInfo}>
-                📍 Live Node: {selectedHub.name}, {selectedHub.city} ({selectedHub.pincode}) ·{" "}
-                {selectedHub.darkStoreCluster}
-              </Text>
-
-              {/* Action controls */}
-              <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
-                <Pressable
-                  onPress={() => runLiveStoreCrawl()}
-                  disabled={isCrawling}
-                  style={styles.crawlButton}
-                >
-                  {isCrawling ? (
-                    <ActivityIndicator size="small" color="#FFFFFF" />
-                  ) : (
-                    <Feather name="refresh-cw" size={11} color="#FFFFFF" />
-                  )}
-                  <Text style={styles.crawlButtonText}>
-                    {isCrawling ? "Crawling 6 Stores..." : "Refresh Live ETAs"}
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setShowMcpTelemetry(!showMcpTelemetry)}
-                  style={styles.telemetryButton}
-                >
-                  <MaterialCommunityIcons name="console" size={13} color={colors.ink} />
-                  <Text style={styles.telemetryButtonText}>
-                    {showMcpTelemetry ? "Hide MCP Telemetry" : "Inspect MCP Tool Logs"}
-                  </Text>
-                </Pressable>
-              </View>
-
-              {/* Monospace MCP Telemetry Logs */}
-              {showMcpTelemetry && (
-                <View style={styles.mcpConsoleLogs}>
-                  <Text style={styles.mcpConsoleHeading}>MCP TOOL EXECUTION STREAM:</Text>
-                  {mcpLogs.map((log, index) => (
-                    <Text key={index} style={styles.mcpLogEntry}>
-                      {log}
-                    </Text>
+                {/* Quick Popular Dish Pills */}
+                <View style={styles.popularDishesRow}>
+                  {POPULAR_DISHES.map((dish) => (
+                    <Pressable
+                      key={dish.label}
+                      onPress={() => {
+                        setDishInput(dish.label);
+                        handleAnalyzeDish(dish.prompt, servings);
+                      }}
+                      style={styles.popularDishPill}
+                    >
+                      <Text style={styles.popularDishPillText}>{dish.label}</Text>
+                    </Pressable>
                   ))}
                 </View>
-              )}
-            </View>
+              </View>
+            </ImageBackground>
 
-            {/* Best Value Banner */}
-            {maxSavings > 0 && (
-              <View style={styles.curatedCard}>
-                <View style={styles.curatedBadge}>
-                  <Text style={styles.curatedBadgeText}>BEST ESTIMATED QUOTE</Text>
-                </View>
-                <Text style={styles.menuHeadline}>
-                  {cheapest.name} total quote: {formatRupees(storeTotals[cheapest.id])}
-                </Text>
-                <Text style={styles.ideologyText}>
-                  Save up to {formatRupees(maxSavings)} compared to {costliest.name}. Live delivery
-                  arrival times dynamically calculated for {selectedHub.name}.
+            {/* Pleasant Loading Indicator */}
+            {isAnalyzing && (
+              <View style={styles.loadingCard}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={styles.loadingTitle}>{analysisStep}</Text>
+                <Text style={styles.loadingSub}>
+                  Matching genuine product packages from Blinkit, Zepto, Swiggy Instamart, BigBasket...
                 </Text>
               </View>
             )}
 
-            {/* 6 Store Real-Time Rows */}
-            <Text style={styles.sectionTitle}>6 Platform Dynamic Delivery Windows</Text>
-            <View style={{ gap: 10 }}>
-              {ranking.map((s, idx) => {
-                const total = storeTotals[s.id];
-                const isSelected = selectedStore === s.id;
-                const isCheapest = idx === 0 && total > 0;
-                const liveStatus = liveETAs[s.id];
+            {/* Dish Summary & Action Card */}
+            {plan && !isAnalyzing && (
+              <View style={styles.recipeHeaderCard}>
+                <View style={styles.recipeHeaderTop}>
+                  <View style={{ flex: 1, paddingRight: 8 }}>
+                    <Text style={styles.recipeTitle}>{plan.menuTitle}</Text>
+                    <Text style={styles.recipeIdeology}>{plan.culinaryIdeology}</Text>
+                  </View>
 
-                return (
+                  {/* Add to Favorites Button */}
                   <Pressable
-                    key={s.id}
-                    onPress={() => setSelectedStore(s.id)}
-                    style={[
-                      styles.storeRowCard,
-                      isSelected && styles.storeRowCardSelected,
-                    ]}
+                    onPress={toggleFavorite}
+                    style={[styles.favoriteBtn, isFavorited && styles.favoriteBtnActive]}
                   >
-                    <View style={styles.storeRowLeft}>
-                      <View style={[styles.storeStripe, { backgroundColor: s.brandColor }]} />
-                      <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                          <Text style={styles.storeRowName}>{s.name}</Text>
-
-                          {/* Live Status Pill */}
-                          <View
-                            style={[
-                              styles.statusBadgePill,
-                              { backgroundColor: liveStatus.badgeColor + "20", borderColor: liveStatus.badgeColor },
-                            ]}
-                          >
-                            <View style={[styles.statusBadgeDot, { backgroundColor: liveStatus.badgeColor }]} />
-                            <Text style={[styles.statusBadgeText, { color: liveStatus.badgeColor }]}>
-                              {liveStatus.statusBadge}
-                            </Text>
-                          </View>
-
-                          {isCheapest && (
-                            <View style={styles.lowestQuotePill}>
-                              <Text style={styles.lowestQuoteText}>LOWEST</Text>
-                            </View>
-                          )}
-                        </View>
-
-                        {/* Real-time Arrival Clock */}
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 }}>
-                          <Feather name="clock" size={11} color={colors.primary} />
-                          <Text style={styles.liveClockText}>
-                            {liveStatus.etaDisplay} · {liveStatus.arrivalTimeDisplay}
-                          </Text>
-                        </View>
-
-                        <Text style={styles.darkStoreText}>
-                          {liveStatus.darkStoreHub} · {liveStatus.surgeNotice}
-                        </Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.storeRowRight}>
-                      <Text style={styles.storeRowPrice}>{formatRupees(total)}</Text>
-                      <Text style={styles.storeRowCount}>{toBuy.length} items</Text>
-
-                      <Pressable
-                        onPress={() => Linking.openURL(s.cartUrl(toBuy.map((i) => i.searchQuery || i.name)))}
-                        style={styles.directStoreSearchBtn}
-                      >
-                        <Text style={styles.directStoreSearchText}>Search on {s.name.split(" ")[0]}</Text>
-                        <Feather name="arrow-up-right" size={9} color={colors.primary} />
-                      </Pressable>
-                    </View>
+                    <Ionicons
+                      name={isFavorited ? "heart" : "heart-outline"}
+                      size={18}
+                      color={isFavorited ? "#E53935" : colors.muted}
+                    />
+                    <Text style={[styles.favoriteBtnText, isFavorited && styles.favoriteBtnTextActive]}>
+                      {isFavorited ? "Saved" : "Favorite"}
+                    </Text>
                   </Pressable>
-                );
-              })}
-            </View>
-          </View>
-        )}
+                </View>
 
-        {/* TAB 4: BULK ORDER DISPATCH */}
-        {activeTab === "order" && (
-          <View style={styles.tabSection}>
-            <View style={styles.curatedCard}>
-              <View style={styles.curatedBadge}>
-                <Text style={styles.curatedBadgeText}>1-CLICK DISPATCH</Text>
+                {/* Chef cooking note */}
+                {plan.chefNotes ? (
+                  <View style={styles.chefTipBox}>
+                    <Ionicons name="bulb-outline" size={16} color="#E65100" />
+                    <Text style={styles.chefTipText}>{plan.chefNotes}</Text>
+                  </View>
+                ) : null}
+
+                {/* Quick Helper Actions */}
+                <View style={styles.checklistHelperRow}>
+                  <Text style={styles.checklistSummaryText}>
+                    <Text style={{ fontWeight: "700", color: colors.ink }}>{toBuy.length} items to buy</Text>
+                    {haveAtHomeCount > 0 && ` • ${haveAtHomeCount} already at home`}
+                  </Text>
+
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    <Pressable onPress={selectAllItems} style={styles.helperChip}>
+                      <Text style={styles.helperChipText}>Select All</Text>
+                    </Pressable>
+                    <Pressable onPress={excludePantryStaples} style={styles.helperChip}>
+                      <Text style={styles.helperChipText}>I have spices & oil</Text>
+                    </Pressable>
+                  </View>
+                </View>
               </View>
-              <Text style={styles.menuHeadline}>Order Complete Basket</Text>
-              <Text style={styles.ideologyText}>
-                Launch consolidated grocery queries or copy the full order checklist for instant
-                checkout on your preferred fast delivery platform in {selectedHub.name} (
-                {selectedHub.pincode}).
-              </Text>
+            )}
 
-              {/* Store Switcher */}
-              <View style={styles.orderStoreChips}>
-                {STORES.map((s) => (
+            {/* Category Filter Chips */}
+            {plan && !isAnalyzing && (
+              <View style={styles.categoryRow}>
+                {categories.map((cat) => (
                   <Pressable
-                    key={s.id}
-                    onPress={() => setSelectedStore(s.id)}
+                    key={cat}
+                    onPress={() => setSelectedCategory(cat)}
                     style={[
-                      styles.orderStoreChip,
-                      selectedStore === s.id && styles.orderStoreChipActive,
+                      styles.categoryChip,
+                      selectedCategory === cat && styles.categoryChipActive,
                     ]}
                   >
                     <Text
                       style={[
-                        styles.orderStoreChipText,
-                        selectedStore === s.id && styles.orderStoreChipTextActive,
+                        styles.categoryChipText,
+                        selectedCategory === cat && styles.categoryChipTextActive,
                       ]}
                     >
-                      {s.name}
+                      {cat}
                     </Text>
                   </Pressable>
                 ))}
               </View>
+            )}
 
-              {/* Order Box */}
-              <View style={styles.orderSummaryPanel}>
-                <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                  <Text style={styles.summaryStoreTitle}>{currentStore.name}</Text>
-                  <Text style={styles.summaryPriceValue}>{formatRupees(storeTotals[selectedStore])}</Text>
+            {/* List of Ingredients with Real Photos & Checkbox Selection */}
+            {plan && !isAnalyzing && (
+              <View style={styles.ingredientsList}>
+                {filteredItems.map((item) => {
+                  const catMeta = CATEGORY_COLORS[item.category] || CATEGORY_COLORS.Other;
+                  const isChecked = !item.haveAtHome; // checked means "need to buy"
+                  const photo = item.imageUrl || getIngredientImage(item.name);
+
+                  return (
+                    <View
+                      key={item.id}
+                      style={[
+                        styles.ingredientCard,
+                        item.haveAtHome && styles.ingredientCardAtHome,
+                      ]}
+                    >
+                      {/* Product Food Photo */}
+                      <Image
+                        source={{ uri: photo }}
+                        style={styles.ingredientImage}
+                        resizeMode="cover"
+                      />
+
+                      {/* Ingredient Details */}
+                      <View style={styles.ingredientInfo}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                          <View style={[styles.catBadge, { backgroundColor: catMeta.bg }]}>
+                            <Text style={[styles.catBadgeText, { color: catMeta.text }]}>
+                              {item.category}
+                            </Text>
+                          </View>
+                          <Text style={styles.recipePortionText}>
+                            Needs {item.quantity} {item.unit}
+                          </Text>
+                        </View>
+
+                        <Text
+                          style={[
+                            styles.ingredientName,
+                            item.haveAtHome && styles.ingredientNameStriked,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {item.name}
+                        </Text>
+
+                        <Text style={styles.packageSizeText}>{item.packageSize}</Text>
+
+                        {/* Price & Fast Store Links */}
+                        <View style={styles.priceAndStoreRow}>
+                          <Text style={styles.priceTag}>{formatRupees(item.estimatedPrice)}</Text>
+
+                          <View style={styles.miniStoreLinks}>
+                            <Text style={styles.storeLinksLabel}>Stores:</Text>
+                            {STORES.slice(0, 4).map((s) => (
+                              <Pressable
+                                key={s.id}
+                                onPress={() => Linking.openURL(item.storeUrls[s.id])}
+                                style={styles.miniStoreBtn}
+                              >
+                                <View style={[styles.miniStoreDot, { backgroundColor: s.brandColor }]} />
+                                <Text style={styles.miniStoreBtnText}>{s.name.split(" ")[0]}</Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                        </View>
+                      </View>
+
+                      {/* Checkbox / Have at Home Toggle */}
+                      <Pressable
+                        onPress={() => toggleItemSelection(item.id)}
+                        style={[
+                          styles.checkboxBtn,
+                          isChecked ? styles.checkboxBtnChecked : styles.checkboxBtnUnchecked,
+                        ]}
+                      >
+                        <Ionicons
+                          name={isChecked ? "checkmark-circle" : "ellipse-outline"}
+                          size={24}
+                          color={isChecked ? colors.success : colors.muted}
+                        />
+                        <Text style={[styles.checkboxLabel, isChecked && { color: colors.success }]}>
+                          {isChecked ? "Buy" : "At Home"}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Floating Bottom Bar: Direct Transition to Buying */}
+            {plan && toBuy.length > 0 && !isAnalyzing && (
+              <View style={styles.bottomCtaCard}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.bottomCtaTotal}>
+                    {toBuy.length} items to buy • {formatRupees(storeTotals[selectedStore])}
+                  </Text>
+                  <Text style={styles.bottomCtaStoreNotice}>
+                    Cheapest on {cheapestStore.name} ({formatRupees(storeTotals[cheapestStore.id])})
+                  </Text>
                 </View>
-                <Text style={styles.summarySubDetail}>
-                  {toBuy.length} ingredients · {liveETAs[selectedStore]?.etaDisplay || currentStore.deliveryTime} (
-                  {liveETAs[selectedStore]?.arrivalTimeDisplay || ""})
+
+                <Pressable
+                  onPress={() => setActiveTab("buy")}
+                  style={styles.bottomCtaButton}
+                >
+                  <Text style={styles.bottomCtaButtonText}>Compare Stores & Buy</Text>
+                  <Feather name="arrow-right" size={15} color="#FFFFFF" />
+                </Pressable>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* TAB 2: BUYING & STORE PRICE COMPARISON */}
+        {activeTab === "buy" && (
+          <View style={styles.tabSection}>
+            <View style={styles.sectionHeaderCard}>
+              <Text style={styles.sectionHeading}>Compare Store Prices</Text>
+              <Text style={styles.sectionSubheading}>
+                We calculated the exact total for your {toBuy.length} selected items across 6 fast delivery stores near {selectedHub.name}.
+              </Text>
+            </View>
+
+            {/* Cheapest Store Highlight Banner */}
+            {toBuy.length > 0 && (
+              <View style={styles.savingsBanner}>
+                <View style={styles.savingsBadge}>
+                  <Text style={styles.savingsBadgeText}>BEST PRICE</Text>
+                </View>
+                <Text style={styles.savingsTitle}>
+                  {cheapestStore.name} is your cheapest option at {formatRupees(storeTotals[cheapestStore.id])}
+                </Text>
+                <Text style={styles.savingsSubtitle}>
+                  Order all ingredients in one tap and receive delivery in {liveETAs[cheapestStore.id]?.etaDisplay || cheapestStore.deliveryTime}.
+                </Text>
+              </View>
+            )}
+
+            {/* 6 Store Cards */}
+            <View style={{ gap: 12 }}>
+              {ranking.map((s, index) => {
+                const total = storeTotals[s.id];
+                const isSelected = selectedStore === s.id;
+                const isCheapest = index === 0;
+                const etaInfo = liveETAs[s.id];
+
+                return (
+                  <Pressable
+                    key={s.id}
+                    onPress={() => setSelectedStore(s.id)}
+                    style={[
+                      styles.storeCard,
+                      isSelected && styles.storeCardSelected,
+                    ]}
+                  >
+                    <View style={styles.storeCardLeft}>
+                      <View style={[styles.storeColorBar, { backgroundColor: s.brandColor }]} />
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                          <Text style={styles.storeNameText}>{s.name}</Text>
+                          {isCheapest && (
+                            <View style={styles.bestQuoteTag}>
+                              <Text style={styles.bestQuoteTagText}>LOWEST PRICE</Text>
+                            </View>
+                          )}
+                        </View>
+
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 4 }}>
+                          <Feather name="clock" size={12} color={colors.primary} />
+                          <Text style={styles.storeEtaText}>
+                            {etaInfo?.etaDisplay || s.deliveryTime}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    <View style={styles.storeCardRight}>
+                      <Text style={styles.storePriceText}>{formatRupees(total)}</Text>
+                      <Text style={styles.storeItemCountText}>{toBuy.length} items</Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            {/* 1-Tap Checkout Panel */}
+            <View style={styles.checkoutPanel}>
+              <View style={styles.checkoutHeaderRow}>
+                <View>
+                  <Text style={styles.checkoutStoreName}>Order on {currentStore.name}</Text>
+                  <Text style={styles.checkoutDeliveryEta}>
+                    Delivery: {liveETAs[selectedStore]?.etaDisplay || currentStore.deliveryTime} to {selectedHub.name}
+                  </Text>
+                </View>
+                <Text style={styles.checkoutTotalPrice}>
+                  {formatRupees(storeTotals[selectedStore])}
                 </Text>
               </View>
 
-              {/* Primary 1-Click Order Button */}
-              <Pressable onPress={openWholeCart} style={styles.primaryOrderAction}>
-                <Feather name="external-link" size={14} color="#FFFFFF" />
-                <Text style={styles.primaryOrderActionText}>
-                  Open Whole Basket on {currentStore.name}
+              {/* Big 1-Click Order Entire Basket */}
+              <Pressable
+                onPress={() => orderOnStore(currentStore)}
+                style={styles.primaryCheckoutBtn}
+              >
+                <Ionicons name="cart" size={18} color="#FFFFFF" />
+                <Text style={styles.primaryCheckoutBtnText}>
+                  Order Entire Basket on {currentStore.name}
                 </Text>
+                <Feather name="external-link" size={15} color="#FFFFFF" />
               </Pressable>
 
               {/* Copy Links Checklist */}
-              <Pressable onPress={copyWholeCartOrder} style={styles.secondaryOrderAction}>
-                <Feather name="copy" size={13} color={colors.ink} />
-                <Text style={styles.secondaryOrderActionText}>
-                  Copy Multi-Item Order Links Checklist
+              <Pressable onPress={copyShoppingChecklist} style={styles.secondaryCheckoutBtn}>
+                <Feather name="copy" size={14} color={colors.ink} />
+                <Text style={styles.secondaryCheckoutBtnText}>
+                  Copy Shopping Checklist with Links
                 </Text>
               </Pressable>
-            </View>
 
-            {/* Individual Item Direct Search Launchers */}
-            <View style={styles.curatedCard}>
-              <Text style={styles.sectionTitle}>Direct Item Quick Launchers</Text>
-              <View style={{ gap: 8, marginTop: 10 }}>
+              {/* Individual Item Direct Links */}
+              <Text style={styles.individualLinksTitle}>
+                Or buy items individually on {currentStore.name}:
+              </Text>
+              <View style={{ gap: 8 }}>
                 {toBuy.map((item) => (
-                  <Pressable
-                    key={item.id}
-                    onPress={() => Linking.openURL(item.storeUrls[selectedStore])}
-                    style={styles.quickLaunchRow}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.quickLaunchName}>{item.name}</Text>
-                      <Text style={styles.quickLaunchPack}>{item.packageSize}</Text>
+                  <View key={item.id} style={styles.individualItemRow}>
+                    <View style={{ flex: 1, paddingRight: 8 }}>
+                      <Text style={styles.individualItemName}>{item.name}</Text>
+                      <Text style={styles.individualItemPack}>
+                        {item.packageSize} • {formatRupees(item.estimatedPrice)}
+                      </Text>
                     </View>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-                      <Text style={styles.quickLaunchPrice}>₹{item.estimatedPrice}</Text>
-                      <Feather name="arrow-up-right" size={12} color={colors.primary} />
-                    </View>
-                  </Pressable>
+                    <Pressable
+                      onPress={() => Linking.openURL(currentStore.searchUrl(item.searchQuery || item.name))}
+                      style={styles.individualBuyBtn}
+                    >
+                      <Text style={styles.individualBuyBtnText}>Buy</Text>
+                      <Feather name="arrow-up-right" size={11} color={colors.primary} />
+                    </Pressable>
+                  </View>
                 ))}
               </View>
             </View>
           </View>
         )}
 
-        {/* TAB 5: SETTINGS & CULINARY HISTORY */}
+        {/* TAB 3: FAVORITES (Saved Recipes & Quick Re-order) */}
+        {activeTab === "favorites" && (
+          <View style={styles.tabSection}>
+            <View style={styles.sectionHeaderCard}>
+              <Text style={styles.sectionHeading}>My Favorite Dishes</Text>
+              <Text style={styles.sectionSubheading}>
+                Save any dish by tapping the heart icon ❤️ on the recipe screen. Tap any dish below to instantly reload all ingredients and store prices!
+              </Text>
+            </View>
+
+            {favorites.length === 0 ? (
+              <View style={styles.emptyFavoritesCard}>
+                <Ionicons name="heart-outline" size={48} color={colors.muted} />
+                <Text style={styles.emptyFavoritesTitle}>No favorites saved yet</Text>
+                <Text style={styles.emptyFavoritesSub}>
+                  When you find a dish you love, tap "Favorite" to save it here for easy re-ordering anytime!
+                </Text>
+                <Pressable
+                  onPress={() => setActiveTab("cook")}
+                  style={styles.exploreDishesBtn}
+                >
+                  <Text style={styles.exploreDishesBtnText}>Explore Recipes</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={{ gap: 12 }}>
+                {favorites.map((fav) => (
+                  <View key={fav.id} style={styles.favoriteItemCard}>
+                    <Image
+                      source={{ uri: fav.photoUrl }}
+                      style={styles.favoriteItemImage}
+                      resizeMode="cover"
+                    />
+                    <View style={styles.favoriteItemDetails}>
+                      <Text style={styles.favoriteItemTitle}>{fav.title}</Text>
+                      <Text style={styles.favoriteItemSub} numberOfLines={2}>
+                        {fav.culinaryIdeology}
+                      </Text>
+                      <Text style={styles.favoriteItemMeta}>
+                        {fav.ingredients.length} ingredients • {fav.servings} servings • Saved {fav.savedAt}
+                      </Text>
+
+                      <View style={styles.favoriteItemActions}>
+                        <Pressable
+                          onPress={() => loadFavoriteDish(fav)}
+                          style={styles.cookAgainBtn}
+                        >
+                          <Ionicons name="restaurant" size={13} color="#FFFFFF" />
+                          <Text style={styles.cookAgainBtnText}>Cook This Again</Text>
+                        </Pressable>
+
+                        <Pressable
+                          onPress={() => removeFavorite(fav.id)}
+                          style={styles.removeFavBtn}
+                        >
+                          <Feather name="trash-2" size={14} color={colors.muted} />
+                        </Pressable>
+                      </View>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* TAB 4: SETTINGS */}
         {activeTab === "settings" && (
           <View style={styles.tabSection}>
-            <View style={styles.curatedCard}>
-              <View style={styles.curatedBadge}>
-                <Text style={styles.curatedBadgeText}>INTELLIGENCE ENGINE</Text>
-              </View>
-              <Text style={styles.menuHeadline}>AI Agent Engine Settings</Text>
-              <Text style={styles.ideologyText}>
-                Active model: stepfun-ai/step-5-preview with chain-of-thought culinary reasoning.
+            <View style={styles.sectionHeaderCard}>
+              <Text style={styles.sectionHeading}>App Settings</Text>
+              <Text style={styles.sectionSubheading}>
+                Configure delivery preferences and AI provider.
+              </Text>
+            </View>
+
+            {/* Delivery Location Setting */}
+            <View style={styles.settingsSectionCard}>
+              <Text style={styles.settingsSectionTitle}>Delivery Location</Text>
+              <Text style={styles.settingsSectionSub}>
+                Currently delivering to: <Text style={{ fontWeight: "700" }}>{selectedHub.name}, {selectedHub.city} ({selectedHub.pincode})</Text>
+              </Text>
+              <Pressable
+                onPress={() => setShowLocationPicker(true)}
+                style={styles.changeLocationBtn}
+              >
+                <Feather name="map-pin" size={14} color={colors.ink} />
+                <Text style={styles.changeLocationBtnText}>Change Area / Detect GPS</Text>
+              </Pressable>
+            </View>
+
+            {/* AI Provider Config */}
+            <View style={styles.settingsSectionCard}>
+              <Text style={styles.settingsSectionTitle}>AI Recipe Engine</Text>
+              <Text style={styles.settingsSectionSub}>
+                Select the AI model that plans dishes and verifies commercial packs.
               </Text>
 
-              {/* Provider Options */}
-              <View style={{ gap: 8, marginTop: 12 }}>
-                <Pressable
-                  onPress={() => setAiProvider("nvidia")}
-                  style={[
-                    styles.providerOptionCard,
-                    aiProvider === "nvidia" && styles.providerOptionCardActive,
-                  ]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.providerOptionTitle}>NVIDIA NIM (Active Agent)</Text>
-                    <Text style={styles.providerOptionSub}>
-                      Active model: stepfun-ai/step-5-preview with verified culinary reasoning.
+              {/* Provider Selector */}
+              <View style={styles.providerRow}>
+                {(["nvidia", "free", "offline"] as AiProvider[]).map((p) => (
+                  <Pressable
+                    key={p}
+                    onPress={() => setAiProvider(p)}
+                    style={[
+                      styles.providerChip,
+                      aiProvider === p && styles.providerChipActive,
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.providerChipText,
+                        aiProvider === p && styles.providerChipTextActive,
+                      ]}
+                    >
+                      {p === "nvidia" ? "NVIDIA NIM" : p === "free" ? "Free Global" : "Built-in"}
                     </Text>
-                  </View>
-                  {aiProvider === "nvidia" && (
-                    <Feather name="check-circle" size={17} color={colors.primary} />
-                  )}
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setAiProvider("free")}
-                  style={[
-                    styles.providerOptionCard,
-                    aiProvider === "free" && styles.providerOptionCardActive,
-                  ]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.providerOptionTitle}>Free Global AI (Zero Credit Limit)</Text>
-                    <Text style={styles.providerOptionSub}>
-                      Unlimited cloud AI with no API keys or limits.
-                    </Text>
-                  </View>
-                  {aiProvider === "free" && (
-                    <Feather name="check-circle" size={17} color={colors.primary} />
-                  )}
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setAiProvider("offline")}
-                  style={[
-                    styles.providerOptionCard,
-                    aiProvider === "offline" && styles.providerOptionCardActive,
-                  ]}
-                >
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.providerOptionTitle}>Offline Recipe Rules Engine</Text>
-                    <Text style={styles.providerOptionSub}>
-                      Zero network usage. Direct on-device Indian recipe scaling.
-                    </Text>
-                  </View>
-                  {aiProvider === "offline" && (
-                    <Feather name="check-circle" size={17} color={colors.primary} />
-                  )}
-                </Pressable>
+                  </Pressable>
+                ))}
               </View>
 
-              {/* NVIDIA fields */}
               {aiProvider === "nvidia" && (
-                <View style={{ gap: 8, marginTop: 12 }}>
-                  <Text style={styles.inputFieldLabel}>NVIDIA API KEY</Text>
+                <View style={{ gap: 10, marginTop: 12 }}>
+                  <Text style={styles.inputLabel}>NVIDIA API KEY</Text>
                   <TextInput
                     value={apiKeyInput}
                     onChangeText={setApiKeyInput}
                     secureTextEntry
                     placeholder="nvapi-..."
+                    placeholderTextColor={colors.muted}
                     style={styles.settingsInput}
                   />
 
-                  <Text style={styles.inputFieldLabel}>MODEL ID</Text>
+                  <Text style={styles.inputLabel}>MODEL ID</Text>
                   <TextInput
                     value={modelInput}
                     onChangeText={setModelInput}
                     placeholder="stepfun-ai/step-5-preview"
+                    placeholderTextColor={colors.muted}
                     style={styles.settingsInput}
                   />
                 </View>
               )}
 
-              {/* Actions */}
-              <View style={{ flexDirection: "row", gap: 8, marginTop: 14 }}>
-                <Pressable
-                  onPress={testConnection}
-                  disabled={testingAi}
-                  style={styles.secondaryOrderAction}
-                >
-                  <Text style={styles.secondaryOrderActionText}>
-                    {testingAi ? "Verifying..." : "Verify Connection"}
-                  </Text>
-                </Pressable>
-
-                <Pressable onPress={handleSaveSettings} style={styles.primaryOrderAction}>
-                  <Text style={styles.primaryOrderActionText}>Save Config</Text>
-                </Pressable>
-              </View>
-
-              {testResult && (
-                <View style={styles.testResultPill}>
-                  <Text style={styles.testResultText}>{testResult}</Text>
-                </View>
-              )}
+              <Pressable onPress={handleSaveSettings} style={styles.saveSettingsBtn}>
+                <Text style={styles.saveSettingsBtnText}>Save Settings</Text>
+              </Pressable>
             </View>
-
-            {/* Saved Concepts History */}
-            {savedHistory.length > 0 && (
-              <View style={styles.curatedCard}>
-                <Text style={styles.sectionTitle}>Saved Culinary Concepts</Text>
-                <View style={{ gap: 8, marginTop: 10 }}>
-                  {savedHistory.map((item) => (
-                    <Pressable
-                      key={item.id}
-                      onPress={() => loadHistory(item)}
-                      style={styles.historyRowItem}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.historyTitleText}>{item.title}</Text>
-                        <Text style={styles.historySubText}>
-                          {item.plan.dishes.join(", ")} · {item.plan.servings} servings · {item.date}
-                        </Text>
-                      </View>
-                      <Feather name="arrow-right" size={13} color={colors.primary} />
-                    </Pressable>
-                  ))}
-                </View>
-              </View>
-            )}
           </View>
         )}
       </KeyboardAwareScrollViewCompat>
 
-      {/* Modern SF Persistent Bottom Dock */}
+      {/* Modern Light Foodie Bottom Dock */}
       <View style={[styles.bottomDock, { paddingBottom: Math.max(12, insets.bottom) }]}>
         <Pressable
-          onPress={() => setActiveTab("story")}
-          style={[styles.dockTab, activeTab === "story" && styles.dockTabActive]}
+          onPress={() => setActiveTab("cook")}
+          style={[styles.dockTab, activeTab === "cook" && styles.dockTabActive]}
         >
-          <MaterialCommunityIcons
-            name="chef-hat"
-            size={18}
-            color={activeTab === "story" ? colors.primary : colors.muted}
+          <Ionicons
+            name={activeTab === "cook" ? "restaurant" : "restaurant-outline"}
+            size={19}
+            color={activeTab === "cook" ? colors.primary : colors.muted}
           />
-          <Text style={[styles.dockTabText, activeTab === "story" && styles.dockTabTextActive]}>
-            Story
+          <Text style={[styles.dockTabText, activeTab === "cook" && styles.dockTabTextActive]}>
+            Cook
           </Text>
         </Pressable>
 
         <Pressable
-          onPress={() => setActiveTab("basket")}
-          style={[styles.dockTab, activeTab === "basket" && styles.dockTabActive]}
+          onPress={() => setActiveTab("buy")}
+          style={[styles.dockTab, activeTab === "buy" && styles.dockTabActive]}
         >
-          <Feather
-            name="shopping-bag"
-            size={17}
-            color={activeTab === "basket" ? colors.primary : colors.muted}
+          <Ionicons
+            name={activeTab === "buy" ? "cart" : "cart-outline"}
+            size={20}
+            color={activeTab === "buy" ? colors.primary : colors.muted}
           />
-          <Text style={[styles.dockTabText, activeTab === "basket" && styles.dockTabTextActive]}>
-            Basket
+          <Text style={[styles.dockTabText, activeTab === "buy" && styles.dockTabTextActive]}>
+            Compare & Buy
           </Text>
         </Pressable>
 
         <Pressable
-          onPress={() => setActiveTab("compare")}
-          style={[styles.dockTab, activeTab === "compare" && styles.dockTabActive]}
+          onPress={() => setActiveTab("favorites")}
+          style={[styles.dockTab, activeTab === "favorites" && styles.dockTabActive]}
         >
-          <Feather
-            name="bar-chart-2"
-            size={17}
-            color={activeTab === "compare" ? colors.primary : colors.muted}
+          <Ionicons
+            name={activeTab === "favorites" ? "heart" : "heart-outline"}
+            size={20}
+            color={activeTab === "favorites" ? colors.primary : colors.muted}
           />
-          <Text style={[styles.dockTabText, activeTab === "compare" && styles.dockTabTextActive]}>
-            Compare
-          </Text>
-        </Pressable>
-
-        <Pressable
-          onPress={() => setActiveTab("order")}
-          style={[styles.dockTab, activeTab === "order" && styles.dockTabActive]}
-        >
-          <Feather
-            name="shopping-cart"
-            size={17}
-            color={activeTab === "order" ? colors.primary : colors.muted}
-          />
-          <Text style={[styles.dockTabText, activeTab === "order" && styles.dockTabTextActive]}>
-            Order
+          <Text style={[styles.dockTabText, activeTab === "favorites" && styles.dockTabTextActive]}>
+            Favorites ({favorites.length})
           </Text>
         </Pressable>
 
@@ -1334,9 +1174,9 @@ export default function HomeScreen() {
           onPress={() => setActiveTab("settings")}
           style={[styles.dockTab, activeTab === "settings" && styles.dockTabActive]}
         >
-          <Feather
-            name="sliders"
-            size={17}
+          <Ionicons
+            name={activeTab === "settings" ? "settings" : "settings-outline"}
+            size={19}
             color={activeTab === "settings" ? colors.primary : colors.muted}
           />
           <Text style={[styles.dockTabText, activeTab === "settings" && styles.dockTabTextActive]}>
@@ -1358,1051 +1198,1014 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       flex: 1,
     },
     scrollContent: {
-      paddingHorizontal: 20,
+      paddingHorizontal: 16,
       maxWidth: 720,
       width: "100%",
       alignSelf: "center",
     },
-    tabSection: {
-      gap: 14,
-      marginTop: 16,
-    },
 
-    // Ambient Toast Notice
-    toast: {
+    // Floating Notice Toast
+    toastContainer: {
       position: "absolute",
-      top: 48,
-      alignSelf: "center",
+      top: 50,
+      left: 20,
+      right: 20,
       zIndex: 999,
-      backgroundColor: colors.surfaceCard,
-      borderWidth: 1,
-      borderColor: colors.hairlineStrong,
-      borderRadius: 9999,
-      paddingVertical: 8,
+      backgroundColor: "#202124",
+      paddingVertical: 12,
       paddingHorizontal: 16,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 8,
+      borderRadius: 12,
       shadowColor: "#000",
       shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.25,
+      shadowOpacity: 0.15,
       shadowRadius: 10,
+      elevation: 5,
+      alignSelf: "center",
+      maxWidth: 480,
     },
     toastText: {
-      color: colors.ink,
-      fontSize: 12,
-      fontWeight: "500",
+      color: "#FFFFFF",
+      fontSize: 13,
+      fontWeight: "600",
+      textAlign: "center",
     },
 
-    // Brand Header Row
+    // Header Row
     headerRow: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
       paddingBottom: 14,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.hairline,
     },
     brandTitleRow: {
       flexDirection: "row",
       alignItems: "center",
       gap: 8,
     },
-    flameIconContainer: {
-      width: 22,
-      height: 22,
-      borderRadius: 11,
+    brandIconBadge: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
       backgroundColor: colors.primary,
       alignItems: "center",
       justifyContent: "center",
     },
     brandTitle: {
-      fontSize: 13,
+      fontSize: 18,
       fontWeight: "800",
-      letterSpacing: 1.2,
       color: colors.ink,
+      letterSpacing: -0.3,
     },
     brandTagline: {
-      fontSize: 11,
+      fontSize: 12,
       color: colors.muted,
       marginTop: 2,
     },
-    locationPill: {
+    locationChip: {
       flexDirection: "row",
       alignItems: "center",
       gap: 6,
-      backgroundColor: colors.surfaceCard,
+      backgroundColor: colors.card,
+      paddingVertical: 7,
+      paddingHorizontal: 12,
+      borderRadius: 20,
       borderWidth: 1,
-      borderColor: colors.hairlineStrong,
-      paddingVertical: 6,
-      paddingHorizontal: 10,
-      borderRadius: 9999,
-      maxWidth: 200,
+      borderColor: colors.border,
+      maxWidth: 160,
     },
-    liveGpsDot: {
-      width: 6,
-      height: 6,
-      borderRadius: 3,
-      backgroundColor: colors.success,
-    },
-    locationPillText: {
-      fontSize: 11,
+    locationChipText: {
+      fontSize: 12,
       fontWeight: "600",
       color: colors.ink,
+      flexShrink: 1,
     },
 
-    // Location Dropdown Sheet
-    locationDropdownCard: {
-      backgroundColor: colors.surfaceCard,
+    // Location Dropdown Card
+    locationCard: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 16,
       borderWidth: 1,
-      borderColor: colors.hairlineStrong,
-      borderRadius: 14,
-      padding: 14,
-      marginTop: 8,
-      gap: 10,
+      borderColor: colors.border,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06,
+      shadowRadius: 8,
+      elevation: 2,
     },
-    locationDropdownHeader: {
+    locationCardHeader: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
+      marginBottom: 12,
     },
-    locationDropdownTitle: {
-      fontSize: 9,
+    locationCardTitle: {
+      fontSize: 13,
       fontWeight: "700",
-      letterSpacing: 0.8,
-      color: colors.muted,
+      color: colors.ink,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
     },
-    gpsDetectButton: {
+    gpsDetectBtn: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 5,
-      backgroundColor: colors.primary,
-      paddingVertical: 4,
-      paddingHorizontal: 10,
-      borderRadius: 6,
-    },
-    gpsDetectButtonText: {
-      fontSize: 10,
-      fontWeight: "600",
-      color: "#FFFFFF",
-    },
-    hubGrid: {
-      flexDirection: "row",
-      flexWrap: "wrap",
       gap: 6,
-    },
-    hubGridItem: {
-      backgroundColor: colors.canvasSoft,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: 8,
+      backgroundColor: colors.primary,
       paddingVertical: 6,
       paddingHorizontal: 10,
+      borderRadius: 12,
     },
-    hubGridItemActive: {
-      backgroundColor: colors.primary,
-      borderColor: colors.primary,
-    },
-    hubGridItemName: {
+    gpsDetectBtnText: {
       fontSize: 11,
       fontWeight: "600",
-      color: colors.ink,
-    },
-    hubGridItemNameActive: {
       color: "#FFFFFF",
     },
-    hubGridItemCity: {
-      fontSize: 9,
+    locationGrid: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    locationGridItem: {
+      paddingVertical: 8,
+      paddingHorizontal: 12,
+      borderRadius: 10,
+      backgroundColor: colors.surfaceTile,
+      borderWidth: 1,
+      borderColor: "transparent",
+    },
+    locationGridItemActive: {
+      backgroundColor: colors.secondary,
+      borderColor: colors.primary,
+    },
+    locationGridItemName: {
+      fontSize: 12,
+      fontWeight: "700",
+      color: colors.ink,
+    },
+    locationGridItemNameActive: {
+      color: colors.primary,
+    },
+    locationGridItemCity: {
+      fontSize: 10,
       color: colors.muted,
-      marginTop: 1,
+      marginTop: 2,
     },
 
-    // Hero Section: Clean, Editorial & Inviting
-    heroSection: {
-      marginTop: 18,
-      gap: 6,
+    // Tab Sections
+    tabSection: {
+      gap: 16,
     },
-    heroTitle: {
-      fontSize: 26,
-      fontWeight: "400",
-      letterSpacing: -0.3,
+
+    // Grand Hero Banner
+    heroBanner: {
+      borderRadius: 20,
+      overflow: "hidden",
+      marginBottom: 4,
+    },
+    heroBannerImage: {
+      borderRadius: 20,
+    },
+    heroOverlay: {
+      backgroundColor: "rgba(255, 255, 255, 0.92)",
+      padding: 18,
+      borderRadius: 20,
+    },
+    heroGreeting: {
+      fontSize: 22,
+      fontWeight: "800",
       color: colors.ink,
-      lineHeight: 32,
+      letterSpacing: -0.5,
     },
     heroSub: {
       fontSize: 13,
       color: colors.body,
-      lineHeight: 19,
-      marginBottom: 10,
+      marginTop: 4,
+      marginBottom: 14,
+      lineHeight: 18,
     },
 
-    // Glowing Gourmet Omnibar Vessel
-    omnibarVessel: {
-      backgroundColor: colors.surfaceCard,
-      borderWidth: 1,
-      borderColor: colors.hairlineStrong,
+    // Input Card inside Hero
+    inputCard: {
+      backgroundColor: "#FFFFFF",
       borderRadius: 16,
-      padding: 14,
-      shadowColor: colors.primary,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.1,
-      shadowRadius: 12,
+      padding: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05,
+      shadowRadius: 6,
+      elevation: 2,
+      marginBottom: 12,
     },
-    omnibarInput: {
-      fontSize: 14,
-      lineHeight: 22,
+    inputRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 10,
+    },
+    searchInput: {
+      flex: 1,
+      fontSize: 15,
+      fontWeight: "500",
       color: colors.ink,
-      minHeight: 64,
-      textAlignVertical: "top",
-      padding: 0,
+      minHeight: 44,
+      paddingTop: 0,
     },
-    omnibarControls: {
+    inputControlsRow: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
+      marginTop: 10,
+      paddingTop: 10,
       borderTopWidth: 1,
       borderTopColor: colors.hairlineSoft,
-      paddingTop: 10,
-      marginTop: 8,
     },
-    stepperContainer: {
+    servingsStepper: {
       flexDirection: "row",
       alignItems: "center",
       gap: 8,
-      backgroundColor: colors.canvasSoft,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: 8,
+      backgroundColor: colors.surfaceTile,
       paddingVertical: 5,
-      paddingHorizontal: 10,
+      paddingHorizontal: 8,
+      borderRadius: 10,
     },
-    stepperBtn: {
-      padding: 2,
+    stepperButton: {
+      padding: 4,
     },
-    stepperText: {
+    servingsText: {
       fontSize: 12,
-      fontWeight: "600",
+      fontWeight: "700",
       color: colors.ink,
     },
-    synthesizeActionBtn: {
-      backgroundColor: colors.primary,
+    findIngredientsBtn: {
       flexDirection: "row",
       alignItems: "center",
       gap: 6,
+      backgroundColor: colors.primary,
       paddingVertical: 9,
       paddingHorizontal: 16,
-      borderRadius: 8,
-      shadowColor: colors.primary,
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.3,
-      shadowRadius: 6,
+      borderRadius: 12,
     },
-    synthesizeActionText: {
+    findIngredientsBtnText: {
       color: "#FFFFFF",
-      fontSize: 12,
+      fontSize: 13,
       fontWeight: "700",
-      letterSpacing: 0.2,
     },
     btnDisabled: {
-      opacity: 0.5,
+      opacity: 0.7,
     },
 
-    // Taste Inspirations Pills
-    tastePillsRow: {
+    // Popular Dish Pills
+    popularDishesRow: {
       flexDirection: "row",
       flexWrap: "wrap",
-      gap: 6,
-      marginTop: 10,
+      gap: 8,
     },
-    tastePill: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      backgroundColor: colors.surfaceCard,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: 8,
-      paddingVertical: 6,
-      paddingHorizontal: 10,
-    },
-    tastePillText: {
-      fontSize: 11,
-      color: colors.body,
-      fontWeight: "500",
-    },
-
-    // Peaceful Thinking State
-    thinkingContainer: {
-      backgroundColor: colors.surfaceCard,
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.hairlineStrong,
-      padding: 24,
-      marginTop: 16,
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 6,
-    },
-    thinkingHalo: {
-      width: 12,
-      height: 12,
-      borderRadius: 6,
-      backgroundColor: colors.primary,
-      opacity: 0.8,
-      marginBottom: 2,
-    },
-    thinkingTitle: {
-      fontSize: 14,
-      fontWeight: "600",
-      color: colors.ink,
-    },
-    thinkingSub: {
-      fontSize: 11,
-      color: colors.muted,
-      textAlign: "center",
-    },
-
-    // Curated Editorial Card
-    curatedCard: {
-      backgroundColor: colors.surfaceCard,
-      borderRadius: 16,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      padding: 20,
-    },
-    curatedCardHeader: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 8,
-    },
-    curatedBadge: {
-      backgroundColor: colors.surfaceTile,
-      paddingVertical: 3,
-      paddingHorizontal: 7,
-      borderRadius: 4,
-    },
-    curatedBadgeText: {
-      fontSize: 8,
-      fontWeight: "700",
-      letterSpacing: 0.88,
-      color: colors.primary,
-    },
-    saveActionPill: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 4,
-      paddingVertical: 4,
-      paddingHorizontal: 8,
-      borderRadius: 6,
-      backgroundColor: colors.canvasSoft,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-    },
-    saveActionText: {
-      fontSize: 11,
-      fontWeight: "500",
-      color: colors.ink,
-    },
-    menuHeadline: {
-      fontSize: 22,
-      fontWeight: "400",
-      letterSpacing: -0.28,
-      color: colors.ink,
-    },
-    ideologyText: {
-      fontSize: 13,
-      lineHeight: 20,
-      color: colors.body,
-      fontStyle: "italic",
-      marginTop: 6,
-    },
-    dishesList: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 6,
-      marginTop: 12,
-    },
-    dishBadge: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 5,
-      backgroundColor: colors.canvasSoft,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      paddingVertical: 4,
-      paddingHorizontal: 9,
-      borderRadius: 6,
-    },
-    dishBadgeDot: {
-      width: 5,
-      height: 5,
-      borderRadius: 2.5,
-      backgroundColor: colors.primary,
-    },
-    dishBadgeText: {
-      fontSize: 11,
-      fontWeight: "500",
-      color: colors.ink,
-    },
-    chefAdviceCard: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 7,
-      backgroundColor: colors.canvasSoft,
-      borderLeftWidth: 2,
-      borderLeftColor: colors.accentGold,
-      padding: 10,
-      borderRadius: 4,
-      marginTop: 12,
-    },
-    chefAdviceText: {
-      fontSize: 11,
-      color: colors.body,
-      flex: 1,
-      lineHeight: 16,
-    },
-    viewBasketRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      borderTopWidth: 1,
-      borderTopColor: colors.hairlineSoft,
-      paddingTop: 12,
-      marginTop: 14,
-    },
-    viewBasketRowText: {
-      fontSize: 12,
-      fontWeight: "600",
-      color: colors.primary,
-    },
-
-    // Agent Thought Inspector
-    thoughtHeader: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-    },
-    thoughtTitle: {
-      fontSize: 12,
-      fontWeight: "600",
-      color: colors.ink,
-    },
-    thoughtBody: {
-      marginTop: 10,
-      paddingTop: 10,
-      borderTopWidth: 1,
-      borderTopColor: colors.hairlineSoft,
-    },
-    thoughtText: {
-      fontSize: 11,
-      color: colors.body,
-      lineHeight: 17,
-      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    },
-
-    // Basket Toolbar
-    basketToolbar: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 10,
-    },
-    sectionTitle: {
-      fontSize: 16,
-      fontWeight: "700",
-      color: colors.ink,
-    },
-    sectionSubtitle: {
-      fontSize: 11,
-      color: colors.muted,
-      marginTop: 2,
-    },
-    quickOrderPill: {
-      backgroundColor: colors.primary,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 5,
+    popularDishPill: {
+      backgroundColor: "#FFFFFF",
       paddingVertical: 6,
       paddingHorizontal: 12,
-      borderRadius: 6,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: colors.border,
     },
-    quickOrderPillText: {
-      fontSize: 11,
-      fontWeight: "700",
-      color: "#FFFFFF",
+    popularDishPillText: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.ink,
     },
 
-    // Category Filter Pills
-    categoryFilterRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 6,
-      marginBottom: 12,
-    },
-    catPill: {
-      paddingVertical: 5,
-      paddingHorizontal: 11,
-      borderRadius: 6,
-      backgroundColor: colors.surfaceCard,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-    },
-    catPillActive: {
-      backgroundColor: colors.ink,
-      borderColor: colors.ink,
-    },
-    catPillText: {
-      fontSize: 11,
-      fontWeight: "500",
-      color: colors.muted,
-    },
-    catPillTextActive: {
-      color: "#0A0908",
-      fontWeight: "700",
-    },
-
-    // Editorial Grocery Spec Card (No filler images, 100% correct data)
-    grocerySpecCard: {
-      backgroundColor: colors.surfaceCard,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      padding: 14,
+    // Loading State Card
+    loadingCard: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 24,
+      alignItems: "center",
       gap: 10,
+      borderWidth: 1,
+      borderColor: colors.border,
     },
-    grocerySpecCardDimmed: {
-      opacity: 0.45,
-      backgroundColor: colors.canvasSoft,
+    loadingTitle: {
+      fontSize: 15,
+      fontWeight: "700",
+      color: colors.ink,
+      textAlign: "center",
     },
-    specHeaderRow: {
+    loadingSub: {
+      fontSize: 12,
+      color: colors.muted,
+      textAlign: "center",
+      maxWidth: 360,
+    },
+
+    // Recipe Header Card
+    recipeHeaderCard: {
+      backgroundColor: colors.card,
+      borderRadius: 18,
+      padding: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05,
+      shadowRadius: 8,
+      elevation: 2,
+    },
+    recipeHeaderTop: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "flex-start",
     },
-    catBadgePill: {
+    recipeTitle: {
+      fontSize: 19,
+      fontWeight: "800",
+      color: colors.ink,
+      letterSpacing: -0.3,
+    },
+    recipeIdeology: {
+      fontSize: 13,
+      color: colors.body,
+      marginTop: 4,
+      lineHeight: 18,
+    },
+    favoriteBtn: {
       flexDirection: "row",
       alignItems: "center",
       gap: 4,
-      paddingVertical: 2,
-      paddingHorizontal: 6,
-      borderRadius: 4,
+      backgroundColor: colors.surfaceTile,
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      borderRadius: 16,
     },
-    catBadgeText: {
-      fontSize: 8,
+    favoriteBtnActive: {
+      backgroundColor: "#FEECEB",
+    },
+    favoriteBtnText: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.muted,
+    },
+    favoriteBtnTextActive: {
+      color: "#E53935",
       fontWeight: "700",
-      letterSpacing: 0.4,
     },
-    portionBadgeText: {
+    chefTipBox: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      backgroundColor: "#FFF8E1",
+      padding: 10,
+      borderRadius: 12,
+      marginTop: 12,
+    },
+    chefTipText: {
+      flex: 1,
+      fontSize: 12,
+      color: "#F57F17",
+      lineHeight: 16,
+    },
+    checklistHelperRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginTop: 14,
+      paddingTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.hairlineSoft,
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    checklistSummaryText: {
+      fontSize: 12,
+      color: colors.muted,
+    },
+    helperChip: {
+      backgroundColor: colors.surfaceTile,
+      paddingVertical: 4,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+    },
+    helperChipText: {
       fontSize: 11,
       fontWeight: "600",
-      color: colors.accentGold,
+      color: colors.ink,
     },
-    itemNameTitle: {
-      fontSize: 16,
+
+    // Category Filter Chips
+    categoryRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: 8,
+    },
+    categoryChip: {
+      paddingVertical: 6,
+      paddingHorizontal: 14,
+      borderRadius: 20,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    categoryChipActive: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    categoryChipText: {
+      fontSize: 12,
+      fontWeight: "600",
+      color: colors.ink,
+    },
+    categoryChipTextActive: {
+      color: "#FFFFFF",
+    },
+
+    // Ingredient Product Cards with Real Photos
+    ingredientsList: {
+      gap: 10,
+    },
+    ingredientCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: 12,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.04,
+      shadowRadius: 5,
+      elevation: 1,
+    },
+    ingredientCardAtHome: {
+      opacity: 0.55,
+      backgroundColor: colors.surfaceTile,
+    },
+    ingredientImage: {
+      width: 72,
+      height: 72,
+      borderRadius: 12,
+      backgroundColor: colors.surfaceTile,
+    },
+    ingredientInfo: {
+      flex: 1,
+      gap: 3,
+    },
+    catBadge: {
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 6,
+    },
+    catBadgeText: {
+      fontSize: 9,
+      fontWeight: "700",
+      textTransform: "uppercase",
+    },
+    recipePortionText: {
+      fontSize: 10,
+      color: colors.muted,
+    },
+    ingredientName: {
+      fontSize: 15,
       fontWeight: "700",
       color: colors.ink,
-      marginTop: 2,
     },
-    itemNameTitleStriked: {
+    ingredientNameStriked: {
       textDecorationLine: "line-through",
       color: colors.muted,
     },
-    itemPackageSpec: {
+    packageSizeText: {
       fontSize: 12,
-      fontWeight: "600",
-      color: colors.accentGold,
-      marginTop: 2,
-    },
-    itemUsedInText: {
-      fontSize: 11,
-      color: colors.muted,
-      marginTop: 2,
-    },
-    priceContainer: {
-      flexDirection: "row",
-      alignItems: "center",
-      backgroundColor: colors.canvasSoft,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: 6,
-      paddingHorizontal: 8,
-      height: 32,
-    },
-    rupeeSign: {
-      fontSize: 13,
-      fontWeight: "600",
-      color: colors.ink,
-    },
-    priceInput: {
-      fontSize: 14,
-      fontWeight: "700",
-      color: colors.ink,
-      minWidth: 40,
-      padding: 0,
-      textAlign: "right",
-    },
-
-    // Real Store Quick Search Pills
-    storeSearchRow: {
-      borderTopWidth: 1,
-      borderTopColor: colors.hairlineSoft,
-      paddingTop: 8,
-      gap: 4,
-    },
-    storeSearchTitle: {
-      fontSize: 8,
-      fontWeight: "700",
-      letterSpacing: 0.8,
-      color: colors.muted,
-    },
-    storeButtonsRow: {
-      flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 4,
-    },
-    quickStorePill: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 4,
-      backgroundColor: colors.canvasSoft,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: 4,
-      paddingVertical: 3,
-      paddingHorizontal: 6,
-    },
-    storeDot: {
-      width: 5,
-      height: 5,
-      borderRadius: 2.5,
-    },
-    quickStorePillText: {
-      fontSize: 9,
-      fontWeight: "600",
-      color: colors.ink,
-    },
-
-    cardFooterActions: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      borderTopWidth: 1,
-      borderTopColor: colors.hairlineSoft,
-      paddingTop: 6,
-    },
-    pantryActionBtn: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 5,
-    },
-    pantryActionBtnActive: {
-      opacity: 0.9,
-    },
-    pantryActionText: {
-      fontSize: 11,
-      fontWeight: "500",
       color: colors.body,
     },
-
-    // MCP Spider Console Card
-    mcpSpiderCard: {
-      backgroundColor: "#110F0E",
-      borderRadius: 14,
-      borderWidth: 1,
-      borderColor: colors.hairlineStrong,
-      padding: 16,
-      gap: 8,
-    },
-    mcpHeader: {
+    priceAndStoreRow: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
+      marginTop: 2,
     },
-    liveSpiderDot: {
+    priceTag: {
+      fontSize: 14,
+      fontWeight: "800",
+      color: colors.success,
+    },
+    miniStoreLinks: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+    },
+    storeLinksLabel: {
+      fontSize: 9,
+      color: colors.muted,
+      marginRight: 2,
+    },
+    miniStoreBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+      backgroundColor: colors.surfaceTile,
+      paddingVertical: 2,
+      paddingHorizontal: 5,
+      borderRadius: 6,
+    },
+    miniStoreDot: {
       width: 6,
       height: 6,
       borderRadius: 3,
-      backgroundColor: colors.success,
     },
-    mcpTitle: {
+    miniStoreBtnText: {
       fontSize: 9,
-      fontWeight: "800",
-      letterSpacing: 0.88,
-      color: colors.success,
-    },
-    mcpLastSync: {
-      fontSize: 10,
-      color: colors.muted,
-    },
-    mcpNodeInfo: {
-      fontSize: 12,
-      color: colors.body,
-    },
-    crawlButton: {
-      backgroundColor: colors.primary,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      paddingVertical: 7,
-      paddingHorizontal: 12,
-      borderRadius: 6,
-    },
-    crawlButtonText: {
-      color: "#FFFFFF",
-      fontSize: 11,
-      fontWeight: "700",
-    },
-    telemetryButton: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      paddingVertical: 7,
-      paddingHorizontal: 12,
-      borderRadius: 6,
-      backgroundColor: colors.surfaceCard,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-    },
-    telemetryButtonText: {
-      fontSize: 11,
+      fontWeight: "600",
       color: colors.ink,
-      fontWeight: "500",
     },
-    mcpConsoleLogs: {
-      backgroundColor: "#080706",
-      borderWidth: 1,
-      borderColor: "#22201D",
-      borderRadius: 6,
-      padding: 10,
-      marginTop: 8,
-      gap: 4,
+    checkboxBtn: {
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 6,
     },
-    mcpConsoleHeading: {
-      fontSize: 8,
-      fontWeight: "800",
-      letterSpacing: 0.8,
-      color: colors.success,
-      marginBottom: 2,
-    },
-    mcpLogEntry: {
+    checkboxBtnChecked: {},
+    checkboxBtnUnchecked: {},
+    checkboxLabel: {
       fontSize: 10,
-      color: "#A19E9A",
-      fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-      lineHeight: 14,
+      fontWeight: "700",
+      color: colors.muted,
+      marginTop: 2,
     },
 
-    // Compare Store Rows
-    storeRowCard: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      backgroundColor: colors.surfaceCard,
-      borderRadius: 12,
-      borderWidth: 1,
-      borderColor: colors.hairline,
+    // Floating Bottom CTA Card
+    bottomCtaCard: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
       padding: 14,
+      borderWidth: 1,
+      borderColor: colors.border,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 3 },
+      shadowOpacity: 0.08,
+      shadowRadius: 10,
+      elevation: 4,
+      marginTop: 6,
     },
-    storeRowCardSelected: {
+    bottomCtaTotal: {
+      fontSize: 14,
+      fontWeight: "800",
+      color: colors.ink,
+    },
+    bottomCtaStoreNotice: {
+      fontSize: 11,
+      color: colors.success,
+      fontWeight: "600",
+      marginTop: 2,
+    },
+    bottomCtaButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      backgroundColor: colors.primary,
+      paddingVertical: 10,
+      paddingHorizontal: 16,
+      borderRadius: 12,
+    },
+    bottomCtaButtonText: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: "#FFFFFF",
+    },
+
+    // Tab 2: Buy & Compare Section
+    sectionHeaderCard: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    sectionHeading: {
+      fontSize: 19,
+      fontWeight: "800",
+      color: colors.ink,
+    },
+    sectionSubheading: {
+      fontSize: 12,
+      color: colors.body,
+      marginTop: 4,
+      lineHeight: 18,
+    },
+    savingsBanner: {
+      backgroundColor: "#E8F5E9",
+      borderRadius: 16,
+      padding: 14,
+      borderWidth: 1,
+      borderColor: "#A5D6A7",
+    },
+    savingsBadge: {
+      alignSelf: "flex-start",
+      backgroundColor: colors.success,
+      paddingVertical: 3,
+      paddingHorizontal: 8,
+      borderRadius: 6,
+      marginBottom: 6,
+    },
+    savingsBadgeText: {
+      color: "#FFFFFF",
+      fontSize: 10,
+      fontWeight: "800",
+    },
+    savingsTitle: {
+      fontSize: 15,
+      fontWeight: "800",
+      color: "#1B5E20",
+    },
+    savingsSubtitle: {
+      fontSize: 12,
+      color: "#2E7D32",
+      marginTop: 3,
+    },
+
+    // Store Cards
+    storeCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 14,
+      borderWidth: 1,
+      borderColor: colors.border,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.04,
+      shadowRadius: 4,
+      elevation: 1,
+    },
+    storeCardSelected: {
       borderColor: colors.primary,
-      backgroundColor: colors.canvasSoft,
+      borderWidth: 2,
+      backgroundColor: "#FFFBFB",
     },
-    storeRowLeft: {
+    storeCardLeft: {
       flexDirection: "row",
       alignItems: "center",
       gap: 12,
       flex: 1,
     },
-    storeStripe: {
-      width: 4,
-      height: 48,
-      borderRadius: 2,
+    storeColorBar: {
+      width: 6,
+      height: 40,
+      borderRadius: 3,
     },
-    storeRowName: {
+    storeNameText: {
       fontSize: 15,
-      fontWeight: "700",
+      fontWeight: "800",
       color: colors.ink,
     },
-    statusBadgePill: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 4,
-      borderWidth: 1,
-      paddingVertical: 1,
-      paddingHorizontal: 6,
-      borderRadius: 4,
-    },
-    statusBadgeDot: {
-      width: 5,
-      height: 5,
-      borderRadius: 2.5,
-    },
-    statusBadgeText: {
-      fontSize: 8,
-      fontWeight: "700",
-      letterSpacing: 0.4,
-    },
-    lowestQuotePill: {
-      backgroundColor: colors.successLight,
+    bestQuoteTag: {
+      backgroundColor: "#E8F5E9",
       paddingVertical: 2,
       paddingHorizontal: 6,
-      borderRadius: 4,
+      borderRadius: 6,
     },
-    lowestQuoteText: {
-      fontSize: 8,
+    bestQuoteTagText: {
+      fontSize: 9,
       fontWeight: "800",
-      color: colors.successForeground,
+      color: colors.success,
     },
-    liveClockText: {
+    storeEtaText: {
       fontSize: 12,
-      fontWeight: "700",
-      color: colors.primary,
+      color: colors.muted,
+      fontWeight: "600",
     },
-    darkStoreText: {
-      fontSize: 10,
+    storeCardRight: {
+      alignItems: "flex-end",
+    },
+    storePriceText: {
+      fontSize: 17,
+      fontWeight: "800",
+      color: colors.ink,
+    },
+    storeItemCountText: {
+      fontSize: 11,
       color: colors.muted,
       marginTop: 2,
     },
-    storeRowRight: {
-      alignItems: "flex-end",
-      marginLeft: 12,
-      gap: 3,
+
+    // 1-Tap Checkout Panel
+    checkoutPanel: {
+      backgroundColor: colors.card,
+      borderRadius: 18,
+      padding: 18,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: 12,
     },
-    storeRowPrice: {
+    checkoutHeaderRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+    },
+    checkoutStoreName: {
       fontSize: 16,
       fontWeight: "800",
       color: colors.ink,
     },
-    storeRowCount: {
-      fontSize: 10,
+    checkoutDeliveryEta: {
+      fontSize: 11,
       color: colors.muted,
-    },
-    directStoreSearchBtn: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 2,
       marginTop: 2,
     },
-    directStoreSearchText: {
-      fontSize: 9,
-      color: colors.primary,
-      fontWeight: "600",
+    checkoutTotalPrice: {
+      fontSize: 20,
+      fontWeight: "900",
+      color: colors.success,
     },
-
-    // Order Screen
-    orderStoreChips: {
+    primaryCheckoutBtn: {
       flexDirection: "row",
-      flexWrap: "wrap",
-      gap: 6,
-      marginTop: 12,
-    },
-    orderStoreChip: {
-      paddingVertical: 7,
-      paddingHorizontal: 12,
-      borderRadius: 6,
-      backgroundColor: colors.canvasSoft,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-    },
-    orderStoreChipActive: {
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
       backgroundColor: colors.primary,
-      borderColor: colors.primary,
+      paddingVertical: 13,
+      borderRadius: 14,
     },
-    orderStoreChipText: {
-      fontSize: 11,
-      fontWeight: "600",
-      color: colors.ink,
-    },
-    orderStoreChipTextActive: {
-      color: "#FFFFFF",
-    },
-    orderSummaryPanel: {
-      marginTop: 14,
-      padding: 14,
-      backgroundColor: colors.canvasSoft,
-      borderRadius: 8,
-      borderWidth: 1,
-      borderColor: colors.hairlineSoft,
-    },
-    summaryStoreTitle: {
-      fontSize: 15,
-      fontWeight: "700",
-      color: colors.ink,
-    },
-    summaryPriceValue: {
-      fontSize: 17,
+    primaryCheckoutBtnText: {
+      fontSize: 14,
       fontWeight: "800",
-      color: colors.primary,
+      color: "#FFFFFF",
     },
-    summarySubDetail: {
-      fontSize: 12,
-      color: colors.muted,
-      marginTop: 3,
-    },
-    primaryOrderAction: {
-      backgroundColor: colors.primary,
-      height: 44,
-      borderRadius: 8,
+    secondaryCheckoutBtn: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "center",
-      gap: 8,
-      marginTop: 14,
-      flex: 1,
+      gap: 6,
+      backgroundColor: colors.surfaceTile,
+      paddingVertical: 11,
+      borderRadius: 12,
     },
-    primaryOrderActionText: {
-      color: "#FFFFFF",
+    secondaryCheckoutBtnText: {
       fontSize: 12,
       fontWeight: "700",
-      letterSpacing: 0.2,
-    },
-    secondaryOrderAction: {
-      backgroundColor: colors.canvasSoft,
-      borderWidth: 1,
-      borderColor: colors.hairlineStrong,
-      height: 44,
-      borderRadius: 8,
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: 8,
-      marginTop: 8,
-      flex: 1,
-    },
-    secondaryOrderActionText: {
       color: colors.ink,
-      fontSize: 12,
-      fontWeight: "500",
     },
-    quickLaunchRow: {
+    individualLinksTitle: {
+      fontSize: 12,
+      fontWeight: "700",
+      color: colors.ink,
+      marginTop: 4,
+    },
+    individualItemRow: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      paddingVertical: 10,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.hairlineSoft,
+      backgroundColor: colors.surfaceTile,
+      padding: 10,
+      borderRadius: 10,
     },
-    quickLaunchName: {
+    individualItemName: {
       fontSize: 13,
-      fontWeight: "600",
+      fontWeight: "700",
       color: colors.ink,
     },
-    quickLaunchPack: {
+    individualItemPack: {
       fontSize: 11,
       color: colors.muted,
       marginTop: 1,
     },
-    quickLaunchPrice: {
+    individualBuyBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+      backgroundColor: "#FFFFFF",
+      paddingVertical: 5,
+      paddingHorizontal: 10,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    individualBuyBtnText: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.primary,
+    },
+
+    // Tab 3: Favorites Section
+    emptyFavoritesCard: {
+      backgroundColor: colors.card,
+      borderRadius: 18,
+      padding: 32,
+      alignItems: "center",
+      gap: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    emptyFavoritesTitle: {
+      fontSize: 16,
+      fontWeight: "700",
+      color: colors.ink,
+    },
+    emptyFavoritesSub: {
+      fontSize: 13,
+      color: colors.muted,
+      textAlign: "center",
+      lineHeight: 18,
+      maxWidth: 320,
+    },
+    exploreDishesBtn: {
+      backgroundColor: colors.primary,
+      paddingVertical: 10,
+      paddingHorizontal: 20,
+      borderRadius: 12,
+      marginTop: 6,
+    },
+    exploreDishesBtnText: {
+      color: "#FFFFFF",
+      fontSize: 13,
+      fontWeight: "700",
+    },
+    favoriteItemCard: {
+      flexDirection: "row",
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      overflow: "hidden",
+      borderWidth: 1,
+      borderColor: colors.border,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.04,
+      shadowRadius: 5,
+      elevation: 1,
+    },
+    favoriteItemImage: {
+      width: 100,
+      height: "100%",
+      minHeight: 110,
+    },
+    favoriteItemDetails: {
+      flex: 1,
+      padding: 12,
+      gap: 4,
+    },
+    favoriteItemTitle: {
+      fontSize: 15,
+      fontWeight: "800",
+      color: colors.ink,
+    },
+    favoriteItemSub: {
+      fontSize: 12,
+      color: colors.body,
+      lineHeight: 16,
+    },
+    favoriteItemMeta: {
+      fontSize: 10,
+      color: colors.muted,
+      marginTop: 2,
+    },
+    favoriteItemActions: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginTop: 8,
+    },
+    cookAgainBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      backgroundColor: colors.primary,
+      paddingVertical: 6,
+      paddingHorizontal: 12,
+      borderRadius: 8,
+    },
+    cookAgainBtnText: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: "#FFFFFF",
+    },
+    removeFavBtn: {
+      padding: 6,
+    },
+
+    // Tab 4: Settings Section
+    settingsSectionCard: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+      gap: 8,
+    },
+    settingsSectionTitle: {
+      fontSize: 15,
+      fontWeight: "800",
+      color: colors.ink,
+    },
+    settingsSectionSub: {
+      fontSize: 12,
+      color: colors.muted,
+      lineHeight: 16,
+    },
+    changeLocationBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      backgroundColor: colors.surfaceTile,
+      paddingVertical: 10,
+      paddingHorizontal: 14,
+      borderRadius: 10,
+      alignSelf: "flex-start",
+      marginTop: 4,
+    },
+    changeLocationBtnText: {
       fontSize: 12,
       fontWeight: "700",
       color: colors.ink,
     },
-
-    // Settings Screen
-    providerOptionCard: {
+    providerRow: {
       flexDirection: "row",
+      gap: 8,
+      marginTop: 6,
+    },
+    providerChip: {
+      flex: 1,
+      paddingVertical: 8,
+      borderRadius: 10,
       alignItems: "center",
-      padding: 14,
-      borderRadius: 8,
-      backgroundColor: colors.canvasSoft,
+      backgroundColor: colors.surfaceTile,
       borderWidth: 1,
-      borderColor: colors.hairline,
+      borderColor: "transparent",
     },
-    providerOptionCardActive: {
+    providerChipActive: {
+      backgroundColor: colors.secondary,
       borderColor: colors.primary,
-      backgroundColor: colors.surfaceCard,
     },
-    providerOptionTitle: {
-      fontSize: 13,
+    providerChipText: {
+      fontSize: 12,
       fontWeight: "600",
-      color: colors.ink,
-    },
-    providerOptionSub: {
-      fontSize: 11,
       color: colors.muted,
-      marginTop: 2,
     },
-    inputFieldLabel: {
-      fontSize: 9,
+    providerChipTextActive: {
+      color: colors.primary,
+      fontWeight: "700",
+    },
+    inputLabel: {
+      fontSize: 11,
       fontWeight: "700",
       color: colors.muted,
-      letterSpacing: 0.88,
-      marginBottom: 6,
+      textTransform: "uppercase",
     },
     settingsInput: {
-      backgroundColor: colors.surfaceCard,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      borderRadius: 8,
+      backgroundColor: colors.surfaceTile,
+      borderRadius: 10,
+      paddingVertical: 9,
       paddingHorizontal: 12,
-      height: 40,
-      fontSize: 12,
+      fontSize: 13,
       color: colors.ink,
     },
-    testResultPill: {
-      backgroundColor: colors.canvasSoft,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-      padding: 10,
-      borderRadius: 6,
+    saveSettingsBtn: {
+      backgroundColor: colors.primary,
+      paddingVertical: 11,
+      borderRadius: 12,
+      alignItems: "center",
       marginTop: 10,
     },
-    testResultText: {
-      fontSize: 11,
-      fontWeight: "500",
-      color: colors.ink,
-    },
-    historyRowItem: {
-      flexDirection: "row",
-      alignItems: "center",
-      backgroundColor: colors.canvasSoft,
-      padding: 12,
-      borderRadius: 8,
-      borderWidth: 1,
-      borderColor: colors.hairline,
-    },
-    historyTitleText: {
+    saveSettingsBtnText: {
+      color: "#FFFFFF",
       fontSize: 13,
-      fontWeight: "600",
-      color: colors.ink,
-    },
-    historySubText: {
-      fontSize: 11,
-      color: colors.muted,
-      marginTop: 2,
+      fontWeight: "700",
     },
 
-    // Bottom Navigation Dock
+    // Persistent Bottom Navigation Dock
     bottomDock: {
       position: "absolute",
       bottom: 0,
       left: 0,
       right: 0,
-      flexDirection: "row",
-      backgroundColor: colors.surfaceCard,
+      backgroundColor: "#FFFFFF",
       borderTopWidth: 1,
-      borderTopColor: colors.hairline,
-      paddingTop: 10,
+      borderTopColor: colors.border,
+      flexDirection: "row",
       justifyContent: "space-around",
       alignItems: "center",
-      maxWidth: 720,
-      alignSelf: "center",
-      width: "100%",
+      paddingTop: 10,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: -3 },
+      shadowOpacity: 0.05,
+      shadowRadius: 8,
+      elevation: 6,
     },
     dockTab: {
       alignItems: "center",
+      justifyContent: "center",
       gap: 3,
-      paddingHorizontal: 12,
-      paddingVertical: 2,
+      paddingHorizontal: 10,
     },
-    dockTabActive: {
-      opacity: 1,
-    },
+    dockTabActive: {},
     dockTabText: {
       fontSize: 10,
-      fontWeight: "500",
+      fontWeight: "600",
       color: colors.muted,
-      letterSpacing: 0.2,
     },
     dockTabTextActive: {
       color: colors.primary,
