@@ -30,10 +30,13 @@ import {
   saveAiConfig,
   RealTimeStoreStatus,
   LocationHub,
-  POPULAR_LOCATIONS,
+  DEFAULT_INITIAL_LOCATION,
+  reverseGeocodeCoords,
+  searchLocationsByQuery,
   crawlRealTimeStoreETAs,
   getIngredientImage,
   DEFAULT_AI_BASE_URL,
+  GROCERY_PACK_SVG,
 } from "@/services/ingredientService";
 
 const STORAGE_KEY = "dish-to-basket.active-plan.v8";
@@ -87,13 +90,18 @@ export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<TabId>("cook");
 
   // Location State
-  const [selectedHub, setSelectedHub] = useState<LocationHub>(POPULAR_LOCATIONS[0]);
+  const [selectedHub, setSelectedHub] = useState<LocationHub>(DEFAULT_INITIAL_LOCATION);
+  const [tempHub, setTempHub] = useState<LocationHub>(DEFAULT_INITIAL_LOCATION);
   const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+  const [isReverseGeocoding, setIsReverseGeocoding] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
+  const [locationSearchInput, setLocationSearchInput] = useState("");
+  const [locationSearchResults, setLocationSearchResults] = useState<LocationHub[]>([]);
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
 
   // Store Pricing & Delivery Times
   const [liveETAs, setLiveETAs] = useState<Record<StoreId, RealTimeStoreStatus>>(() =>
-    crawlRealTimeStoreETAs(POPULAR_LOCATIONS[0]).statuses,
+    crawlRealTimeStoreETAs(DEFAULT_INITIAL_LOCATION).statuses,
   );
 
   // Search & Recipe Input
@@ -175,60 +183,230 @@ export default function HomeScreen() {
     setTimeout(() => setNoticeMessage(null), 3000);
   }
 
-  // Live Location Detection
-  async function detectLiveLocation() {
-    setIsDetectingLocation(true);
-    if (typeof navigator !== "undefined" && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
+  // Load saved location on startup, or auto-detect via GPS
+  useEffect(() => {
+    let active = true;
+    AsyncStorage.getItem("dish-to-basket.saved-hub.v2")
+      .then((raw) => {
+        if (!active) return;
+        if (raw) {
           try {
-            const { latitude, longitude } = position.coords;
-            const res = await fetch(
-              `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`,
-            );
-            const data = await res.json();
-            const name = data.locality || data.city || "Current Location";
-            const city = data.city || data.principalSubdivision || "Bengaluru";
-            const pincode = data.postcode || "560001";
-            const detectedHub: LocationHub = {
-              id: "gps-" + Date.now(),
-              name,
-              city,
-              pincode,
-              darkStoreCluster: `${city} Central Cluster`,
-            };
-            setSelectedHub(detectedHub);
-            updateStoreETAs(detectedHub);
-            flash(`Delivering to ${name}, ${city} (${pincode})`);
-          } catch {
-            flash("Location resolved to Bengaluru.");
-          } finally {
-            setIsDetectingLocation(false);
-            setShowLocationPicker(false);
-          }
-        },
-        () => {
-          setIsDetectingLocation(false);
-          flash("GPS permission denied. Please pick an area below.");
-        },
-        { timeout: 8000 },
-      );
-    } else {
-      setIsDetectingLocation(false);
-      flash("GPS not supported on this browser.");
+            const parsed: LocationHub = JSON.parse(raw);
+            setSelectedHub(parsed);
+            setTempHub(parsed);
+            updateStoreETAs(parsed);
+            return;
+          } catch {}
+        }
+        // Auto-detect GPS silently on first launch
+        detectLiveGpsLocation(false);
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // PostMessage listener for Leaflet Map pin drops
+  useEffect(() => {
+    if (Platform.OS !== "web" || typeof window === "undefined") return;
+
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.data && event.data.type === "DISH_MAP_PIN") {
+        const { lat, lng } = event.data;
+        setIsReverseGeocoding(true);
+        try {
+          const hub = await reverseGeocodeCoords(lat, lng);
+          setTempHub(hub);
+        } catch {
+          setTempHub((prev) => ({
+            ...prev,
+            lat,
+            lng,
+            name: `Pinned (${lat.toFixed(4)}, ${lng.toFixed(4)})`,
+          }));
+        } finally {
+          setIsReverseGeocoding(false);
+        }
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, []);
+
+  // Dynamic Leaflet HTML for Interactive Map Picker
+  const mapHtml = useMemo(() => {
+    const lat = tempHub.lat ?? selectedHub.lat ?? 12.9716;
+    const lng = tempHub.lng ?? selectedHub.lng ?? 77.5946;
+    return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body, html, #map { margin: 0; padding: 0; width: 100%; height: 100%; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .pulse-pin-badge {
+      display: flex; align-items: center; justify-content: center;
+      width: 38px; height: 38px; border-radius: 50%;
+      background: #E65100; color: #FFF; font-size: 18px;
+      box-shadow: 0 4px 14px rgba(230, 81, 0, 0.45);
+      border: 3px solid #FFFFFF;
+      transform: translate(-50%, -50%);
     }
-  }
+    .map-hint-pill {
+      position: absolute; top: 10px; left: 50%; transform: translateX(-50%);
+      background: rgba(30, 41, 59, 0.9); backdrop-filter: blur(8px);
+      padding: 6px 14px; border-radius: 20px; font-size: 11px; font-weight: 600;
+      color: #FFFFFF; box-shadow: 0 4px 12px rgba(0,0,0,0.18); z-index: 1000;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="map-hint-pill">📍 Click map or drag pin to choose delivery spot</div>
+  <div id="map"></div>
+  <script>
+    var map = L.map('map', { zoomControl: true }).setView([${lat}, ${lng}], 15);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+
+    var pinIcon = L.divIcon({
+      className: 'custom-pin-outer',
+      html: '<div class="pulse-pin-badge">📍</div>',
+      iconSize: [38, 38],
+      iconAnchor: [19, 19]
+    });
+
+    var marker = L.marker([${lat}, ${lng}], { draggable: true, icon: pinIcon }).addTo(map);
+
+    function dispatchPin(lat, lng) {
+      try {
+        window.parent.postMessage({ type: 'DISH_MAP_PIN', lat: lat, lng: lng }, '*');
+      } catch (e) {}
+    }
+
+    marker.on('dragend', function (e) {
+      var pos = e.target.getLatLng();
+      dispatchPin(pos.lat, pos.lng);
+    });
+
+    map.on('click', function (e) {
+      marker.setLatLng(e.latlng);
+      dispatchPin(e.latlng.lat, e.latlng.lng);
+    });
+
+    window.addEventListener('message', function (ev) {
+      if (ev.data && ev.data.type === 'PAN_TO_COORDS') {
+        map.flyTo([ev.data.lat, ev.data.lng], 16, { animate: true, duration: 1.0 });
+        marker.setLatLng([ev.data.lat, ev.data.lng]);
+      }
+    });
+  </script>
+</body>
+</html>`;
+  }, [tempHub.lat, tempHub.lng, selectedHub.lat, selectedHub.lng]);
 
   function updateStoreETAs(hub: LocationHub) {
     const result = crawlRealTimeStoreETAs(hub);
     setLiveETAs(result.statuses);
   }
 
-  function handleSelectHub(hub: LocationHub) {
-    setSelectedHub(hub);
+  // Location search input handler
+  async function handleSearchLocationInput(text: string) {
+    setLocationSearchInput(text);
+    if (text.trim().length < 3) {
+      setLocationSearchResults([]);
+      return;
+    }
+    setIsSearchingLocation(true);
+    try {
+      const results = await searchLocationsByQuery(text);
+      setLocationSearchResults(results);
+    } catch {
+      setLocationSearchResults([]);
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  }
+
+  function handleSelectSearchResult(hub: LocationHub) {
+    setTempHub(hub);
+    setLocationSearchInput("");
+    setLocationSearchResults([]);
+    if (Platform.OS === "web" && typeof document !== "undefined") {
+      const iframes = document.querySelectorAll("iframe");
+      iframes.forEach((ifr) => {
+        ifr.contentWindow?.postMessage(
+          { type: "PAN_TO_COORDS", lat: hub.lat, lng: hub.lng },
+          "*",
+        );
+      });
+    }
+  }
+
+  // Live High Accuracy GPS detection
+  async function detectLiveGpsLocation(userInitiated = true) {
+    setIsDetectingLocation(true);
+    if (typeof navigator !== "undefined" && navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            const { latitude, longitude } = position.coords;
+            const hub = await reverseGeocodeCoords(latitude, longitude);
+            setSelectedHub(hub);
+            setTempHub(hub);
+            updateStoreETAs(hub);
+            AsyncStorage.setItem("dish-to-basket.saved-hub.v2", JSON.stringify(hub)).catch(() => {});
+            flash(`GPS: ${hub.name}, ${hub.city} (${hub.pincode})`);
+
+            if (Platform.OS === "web" && typeof document !== "undefined") {
+              const iframes = document.querySelectorAll("iframe");
+              iframes.forEach((ifr) => {
+                ifr.contentWindow?.postMessage(
+                  { type: "PAN_TO_COORDS", lat: hub.lat, lng: hub.lng },
+                  "*",
+                );
+              });
+            }
+
+            if (userInitiated) {
+              setShowLocationPicker(false);
+            }
+          } catch {
+            flash("GPS resolved coordinates, but reverse lookup failed.");
+          } finally {
+            setIsDetectingLocation(false);
+          }
+        },
+        () => {
+          setIsDetectingLocation(false);
+          if (userInitiated) {
+            flash("GPS permission denied or timeout. Please search or pick on map.");
+          }
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+      );
+    } else {
+      setIsDetectingLocation(false);
+      if (userInitiated) {
+        flash("GPS not available on this browser. Please pick on map.");
+      }
+    }
+  }
+
+  function confirmMapLocation() {
+    setSelectedHub(tempHub);
+    updateStoreETAs(tempHub);
+    AsyncStorage.setItem("dish-to-basket.saved-hub.v2", JSON.stringify(tempHub)).catch(() => {});
     setShowLocationPicker(false);
-    updateStoreETAs(hub);
-    flash(`Delivery updated to ${hub.name}, ${hub.city}`);
+    flash(`Delivery location updated: ${tempHub.name}, ${tempHub.city} (${tempHub.pincode})`);
   }
 
   // Analyze Dish & Fetch Ingredients
@@ -326,7 +504,7 @@ export default function HomeScreen() {
         photoUrl:
           plan.ingredients[0]?.imageUrl ||
           getIngredientImage(plan.menuTitle) ||
-          "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=500&auto=format&fit=crop&q=80",
+          GROCERY_PACK_SVG,
       };
       updated = [newFav, ...favorites];
       flash(`Added "${plan.menuTitle}" to Favorites ❤️`);
@@ -507,61 +685,158 @@ export default function HomeScreen() {
           </Pressable>
         </View>
 
-        {/* Location Dropdown Modal / Picker */}
+        {/* Full GPS + Interactive Map Location Modal */}
         {showLocationPicker && (
-          <View style={styles.locationCard}>
-            <View style={styles.locationCardHeader}>
-              <Text style={styles.locationCardTitle}>Select Delivery Location</Text>
-              <Pressable
-                onPress={detectLiveLocation}
-                disabled={isDetectingLocation}
-                style={styles.gpsDetectBtn}
-              >
-                <Feather name="crosshair" size={13} color="#FFFFFF" />
-                <Text style={styles.gpsDetectBtnText}>
-                  {isDetectingLocation ? "Detecting..." : "Use Current GPS"}
+          <View style={styles.locationModalCard}>
+            {/* Modal Header */}
+            <View style={styles.locationModalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.locationModalTitle}>Delivery Location</Text>
+                <Text style={styles.locationModalSub}>
+                  Accurate GPS or pinpoint anywhere on interactive map
                 </Text>
+              </View>
+              <Pressable
+                onPress={() => setShowLocationPicker(false)}
+                style={styles.modalCloseBtn}
+              >
+                <Feather name="x" size={18} color={colors.ink} />
               </Pressable>
             </View>
 
-            <View style={styles.locationGrid}>
-              {POPULAR_LOCATIONS.map((loc) => (
-                <Pressable
-                  key={loc.id}
-                  onPress={() => handleSelectHub(loc)}
-                  style={[
-                    styles.locationGridItem,
-                    selectedHub.id === loc.id && styles.locationGridItemActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.locationGridItemName,
-                      selectedHub.id === loc.id && styles.locationGridItemNameActive,
-                    ]}
-                  >
-                    {loc.name}
-                  </Text>
-                  <Text style={styles.locationGridItemCity}>
-                    {loc.city} ({loc.pincode})
-                  </Text>
+            {/* High-Accuracy GPS Action Button */}
+            <Pressable
+              onPress={() => detectLiveGpsLocation(true)}
+              disabled={isDetectingLocation}
+              style={styles.gpsActionBtn}
+            >
+              {isDetectingLocation ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : (
+                <Feather name="crosshair" size={18} color="#FFFFFF" />
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.gpsActionBtnTitle}>
+                  {isDetectingLocation ? "Detecting High-Accuracy GPS..." : "Use Current GPS Location"}
+                </Text>
+                <Text style={styles.gpsActionBtnSub}>
+                  Instant coordinates via device sensor & live reverse geocoding
+                </Text>
+              </View>
+              <Feather name="chevron-right" size={16} color="#FFFFFF" />
+            </Pressable>
+
+            {/* Address Search Bar */}
+            <View style={styles.locationSearchBox}>
+              <Feather name="search" size={16} color={colors.primary} />
+              <TextInput
+                value={locationSearchInput}
+                onChangeText={handleSearchLocationInput}
+                placeholder="Search any locality, street, landmark, or pincode..."
+                placeholderTextColor={colors.muted}
+                style={styles.locationSearchInput}
+              />
+              {isSearchingLocation && (
+                <ActivityIndicator size="small" color={colors.primary} />
+              )}
+              {locationSearchInput.length > 0 && !isSearchingLocation && (
+                <Pressable onPress={() => { setLocationSearchInput(""); setLocationSearchResults([]); }}>
+                  <Feather name="x-circle" size={16} color={colors.muted} />
                 </Pressable>
-              ))}
+              )}
             </View>
+
+            {/* Live Search Suggestions */}
+            {locationSearchResults.length > 0 && (
+              <View style={styles.searchResultsList}>
+                {locationSearchResults.map((res) => (
+                  <Pressable
+                    key={res.id}
+                    onPress={() => handleSelectSearchResult(res)}
+                    style={styles.searchResultItem}
+                  >
+                    <Ionicons name="location-outline" size={18} color={colors.primary} style={{ marginTop: 2 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.searchResultTitle}>{res.name}</Text>
+                      <Text style={styles.searchResultAddress} numberOfLines={2}>
+                        {res.formattedAddress || `${res.city} (${res.pincode})`}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+
+            {/* Interactive Leaflet OpenStreetMap */}
+            <View style={styles.mapContainer}>
+              {Platform.OS === "web" ? (
+                React.createElement("iframe", {
+                  title: "Interactive Delivery Map",
+                  srcDoc: mapHtml,
+                  style: {
+                    width: "100%",
+                    height: 260,
+                    border: "none",
+                    borderRadius: 14,
+                  },
+                })
+              ) : (
+                <View style={styles.mobileMapFallback}>
+                  <Ionicons name="map-outline" size={32} color={colors.primary} />
+                  <Text style={styles.mobileMapText}>Map interactive on web browser</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Pinned Location Live Summary Card */}
+            <View style={styles.pinnedAddressCard}>
+              <View style={styles.pinnedHeaderRow}>
+                <View style={styles.pinnedIconBubble}>
+                  <Ionicons name="location" size={18} color="#FFFFFF" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.pinnedTitleRow}>
+                    <Text style={styles.pinnedLocalityName}>
+                      {tempHub.name || "Pinned Location"}
+                    </Text>
+                    {isReverseGeocoding && (
+                      <ActivityIndicator size="small" color={colors.primary} style={{ marginLeft: 8 }} />
+                    )}
+                  </View>
+                  <Text style={styles.pinnedFullAddress} numberOfLines={2}>
+                    {tempHub.formattedAddress || `${tempHub.city}, India (${tempHub.pincode})`}
+                  </Text>
+                </View>
+              </View>
+
+              {tempHub.lat && tempHub.lng && (
+                <View style={styles.coordsRow}>
+                  <Text style={styles.coordsText}>
+                    Coords: {tempHub.lat.toFixed(4)}° N, {tempHub.lng.toFixed(4)}° E
+                  </Text>
+                  <Text style={styles.darkStoreClusterText}>
+                    {tempHub.darkStoreCluster}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Confirm Location Button */}
+            <Pressable
+              onPress={confirmMapLocation}
+              style={styles.confirmLocationBtn}
+            >
+              <Ionicons name="checkmark-circle" size={18} color="#FFFFFF" />
+              <Text style={styles.confirmLocationBtnText}>Confirm Delivery Location</Text>
+            </Pressable>
           </View>
         )}
 
         {/* TAB 1: COOK & INGREDIENTS (Main Screen) */}
         {activeTab === "cook" && (
           <View style={styles.tabSection}>
-            {/* Grand Culinary Hero Banner with Food Photo */}
-            <ImageBackground
-              source={{
-                uri: "https://images.unsplash.com/photo-1556910103-1c02745aae4d?w=1200&auto=format&fit=crop&q=80",
-              }}
-              style={styles.heroBanner}
-              imageStyle={styles.heroBannerImage}
-            >
+            {/* Grand Culinary Hero Banner */}
+            <View style={styles.heroBanner}>
               <View style={styles.heroOverlay}>
                 <Text style={styles.heroGreeting}>What do you want to cook today?</Text>
                 <Text style={styles.heroSub}>
@@ -637,7 +912,7 @@ export default function HomeScreen() {
                   ))}
                 </View>
               </View>
-            </ImageBackground>
+            </View>
 
             {/* Pleasant Loading Indicator */}
             {isAnalyzing && (
@@ -1280,76 +1555,205 @@ function createStyles(colors: ReturnType<typeof useColors>) {
       flexShrink: 1,
     },
 
-    // Location Dropdown Card
-    locationCard: {
+    // GPS & Interactive Map Location Modal
+    locationModalCard: {
       backgroundColor: colors.card,
-      borderRadius: 16,
-      padding: 16,
-      marginBottom: 16,
+      borderRadius: 20,
+      padding: 18,
+      marginBottom: 18,
       borderWidth: 1,
       borderColor: colors.border,
       shadowColor: "#000",
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.06,
-      shadowRadius: 8,
-      elevation: 2,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.08,
+      shadowRadius: 16,
+      elevation: 4,
     },
-    locationCardHeader: {
+    locationModalHeader: {
       flexDirection: "row",
       justifyContent: "space-between",
+      alignItems: "flex-start",
+      marginBottom: 14,
+    },
+    locationModalTitle: {
+      fontSize: 16,
+      fontWeight: "800",
+      color: colors.ink,
+      letterSpacing: -0.3,
+    },
+    locationModalSub: {
+      fontSize: 12,
+      color: colors.muted,
+      marginTop: 2,
+    },
+    modalCloseBtn: {
+      padding: 6,
+      borderRadius: 20,
+      backgroundColor: colors.surfaceTile,
+    },
+    gpsActionBtn: {
+      flexDirection: "row",
       alignItems: "center",
+      gap: 12,
+      backgroundColor: colors.primary,
+      paddingVertical: 12,
+      paddingHorizontal: 14,
+      borderRadius: 14,
+      marginBottom: 14,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.25,
+      shadowRadius: 6,
+      elevation: 3,
+    },
+    gpsActionBtnTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: "#FFFFFF",
+    },
+    gpsActionBtnSub: {
+      fontSize: 10.5,
+      color: "rgba(255, 255, 255, 0.85)",
+      marginTop: 1,
+    },
+    locationSearchBox: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      backgroundColor: colors.surfaceTile,
+      borderRadius: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
       marginBottom: 12,
     },
-    locationCardTitle: {
+    locationSearchInput: {
+      flex: 1,
+      fontSize: 13,
+      fontWeight: "500",
+      color: colors.ink,
+      padding: 0,
+    },
+    searchResultsList: {
+      backgroundColor: colors.card,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: 12,
+      overflow: "hidden",
+      maxHeight: 180,
+    },
+    searchResultItem: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 10,
+      padding: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.surfaceTile,
+    },
+    searchResultTitle: {
       fontSize: 13,
       fontWeight: "700",
       color: colors.ink,
-      textTransform: "uppercase",
-      letterSpacing: 0.5,
     },
-    gpsDetectBtn: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      backgroundColor: colors.primary,
-      paddingVertical: 6,
-      paddingHorizontal: 10,
-      borderRadius: 12,
-    },
-    gpsDetectBtnText: {
+    searchResultAddress: {
       fontSize: 11,
-      fontWeight: "600",
-      color: "#FFFFFF",
+      color: colors.muted,
+      marginTop: 2,
     },
-    locationGrid: {
-      flexDirection: "row",
-      flexWrap: "wrap",
+    mapContainer: {
+      height: 260,
+      borderRadius: 14,
+      overflow: "hidden",
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: 14,
+      backgroundColor: "#F1F5F9",
+    },
+    mobileMapFallback: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
       gap: 8,
     },
-    locationGridItem: {
-      paddingVertical: 8,
-      paddingHorizontal: 12,
-      borderRadius: 10,
-      backgroundColor: colors.surfaceTile,
-      borderWidth: 1,
-      borderColor: "transparent",
-    },
-    locationGridItemActive: {
-      backgroundColor: colors.secondary,
-      borderColor: colors.primary,
-    },
-    locationGridItemName: {
+    mobileMapText: {
       fontSize: 12,
+      color: colors.muted,
+      fontWeight: "500",
+    },
+    pinnedAddressCard: {
+      backgroundColor: colors.surfaceTile,
+      borderRadius: 14,
+      padding: 12,
+      borderWidth: 1,
+      borderColor: colors.border,
+      marginBottom: 14,
+    },
+    pinnedHeaderRow: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      gap: 10,
+    },
+    pinnedIconBubble: {
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+      backgroundColor: colors.primary,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    pinnedTitleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    pinnedLocalityName: {
+      fontSize: 14,
       fontWeight: "700",
       color: colors.ink,
     },
-    locationGridItemNameActive: {
-      color: colors.primary,
-    },
-    locationGridItemCity: {
-      fontSize: 10,
+    pinnedFullAddress: {
+      fontSize: 11,
       color: colors.muted,
       marginTop: 2,
+      lineHeight: 16,
+    },
+    coordsRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginTop: 8,
+      paddingTop: 8,
+      borderTopWidth: 1,
+      borderTopColor: "rgba(0,0,0,0.05)",
+    },
+    coordsText: {
+      fontSize: 10,
+      fontWeight: "600",
+      color: colors.primary,
+    },
+    darkStoreClusterText: {
+      fontSize: 10,
+      color: colors.muted,
+    },
+    confirmLocationBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      backgroundColor: colors.primary,
+      paddingVertical: 12,
+      borderRadius: 14,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 6,
+      elevation: 3,
+    },
+    confirmLocationBtnText: {
+      fontSize: 14,
+      fontWeight: "700",
+      color: "#FFFFFF",
     },
 
     // Tab Sections
