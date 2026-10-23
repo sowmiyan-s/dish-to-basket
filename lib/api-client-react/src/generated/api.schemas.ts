@@ -41,3 +41,17 @@ export interface IngredientPlanResponse {
   model: string;
 }
 
+export interface ProductImageCrawlResponse {
+  query: string;
+  imageUrl: string | null;
+  found: boolean;
+  timestamp: string;
+}
+
+export type CrawlProductImageParams = {
+/**
+ * @minLength 1
+ */
+query: string;
+};
+
