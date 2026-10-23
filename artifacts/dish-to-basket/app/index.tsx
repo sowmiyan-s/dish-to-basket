@@ -124,6 +124,8 @@ export default function HomeScreen() {
   // Settings State
   const [aiProvider, setAiProvider] = useState<AiProvider>("nvidia");
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [hasSavedApiKey, setHasSavedApiKey] = useState(false);
+  const [legacyKeyDiscarded, setLegacyKeyDiscarded] = useState(false);
   const [baseUrlInput, setBaseUrlInput] = useState(DEFAULT_AI_BASE_URL);
   const [modelInput, setModelInput] = useState("meta/llama-3.2-11b-vision-instruct");
   const [testingAi, setTestingAi] = useState(false);
@@ -142,7 +144,9 @@ export default function HomeScreen() {
         if (!active) return;
 
         setAiProvider(aiCfg.provider);
-        setApiKeyInput(aiCfg.apiKey);
+        setApiKeyInput("");
+        setHasSavedApiKey(Boolean(aiCfg.apiKey));
+        setLegacyKeyDiscarded(aiCfg.legacyKeyDiscarded);
         setBaseUrlInput(aiCfg.baseUrl);
         setModelInput(aiCfg.model);
 
@@ -624,13 +628,44 @@ export default function HomeScreen() {
 
   // Settings Save
   async function handleSaveSettings() {
-    await saveAiConfig({
-      provider: aiProvider,
-      apiKey: apiKeyInput.trim(),
-      baseUrl: baseUrlInput.trim(),
-      model: modelInput.trim(),
-    });
-    flash("Settings saved successfully.");
+    try {
+      await saveAiConfig({
+        provider: aiProvider,
+        apiKey: apiKeyInput.trim() || undefined,
+        baseUrl: baseUrlInput.trim(),
+        model: modelInput.trim(),
+      });
+      const savedConfig = await getAiConfig();
+      setHasSavedApiKey(Boolean(savedConfig.apiKey));
+      setLegacyKeyDiscarded(false);
+      setApiKeyInput("");
+      flash(
+        apiKeyInput.trim()
+          ? "Settings saved. Your API key is stored securely on this device."
+          : savedConfig.apiKey
+            ? "Settings saved. Your saved API key was kept."
+            : "Settings saved successfully.",
+      );
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Could not save settings securely.");
+    }
+  }
+
+  async function handleRemoveApiKey() {
+    try {
+      await saveAiConfig({
+        provider: aiProvider,
+        clearApiKey: true,
+        baseUrl: baseUrlInput.trim(),
+        model: modelInput.trim(),
+      });
+      setHasSavedApiKey(false);
+      setLegacyKeyDiscarded(false);
+      setApiKeyInput("");
+      flash("Saved NVIDIA API key removed from this device.");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "Could not remove the saved API key.");
+    }
   }
 
   return (
@@ -1373,14 +1408,33 @@ export default function HomeScreen() {
               {aiProvider === "nvidia" && (
                 <View style={{ gap: 10, marginTop: 12 }}>
                   <Text style={styles.inputLabel}>NVIDIA API KEY</Text>
+                  <Text style={styles.settingsSectionSub}>
+                    {hasSavedApiKey
+                      ? "A key is saved in this device's secure storage. Leave this blank to keep it, or enter a new key to replace it."
+                      : "Enter your NVIDIA NIM key. It is saved using platform secure storage where supported and sent to your configured model provider for AI requests."}
+                  </Text>
+                  {legacyKeyDiscarded && (
+                    <Text style={[styles.settingsSectionSub, { color: colors.primary }]}>
+                      A key from an older app version was removed from unencrypted storage. Enter it again to use NVIDIA NIM.
+                    </Text>
+                  )}
                   <TextInput
                     value={apiKeyInput}
                     onChangeText={setApiKeyInput}
                     secureTextEntry
-                    placeholder="nvapi-..."
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder={hasSavedApiKey ? "Enter a new key to replace" : "nvapi-..."}
                     placeholderTextColor={colors.muted}
                     style={styles.settingsInput}
                   />
+
+                  {hasSavedApiKey && (
+                    <Pressable onPress={handleRemoveApiKey} style={styles.changeLocationBtn}>
+                      <Feather name="trash-2" size={14} color={colors.ink} />
+                      <Text style={styles.changeLocationBtnText}>Remove saved key</Text>
+                    </Pressable>
+                  )}
 
                   <Text style={styles.inputLabel}>MODEL ID</Text>
                   <TextInput
