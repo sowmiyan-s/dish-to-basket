@@ -1,4 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as SecureStore from "expo-secure-store";
+import { crawlProductImage } from "@workspace/api-client-react";
 
 export type StoreId =
   | "blinkit"
@@ -507,17 +509,17 @@ export async function crawlLiveStoreProductImage(query: string): Promise<string>
 
   // 1. Try Live API Server Crawler (Scrapes live JioMart / Blinkit / BigBasket search indexes)
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000);
-    const res = await fetch(`http://localhost:5000/api/product-images/crawl?query=${encodeURIComponent(query)}`, {
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.imageUrl && typeof data.imageUrl === "string") {
-        liveSessionImageCache.set(norm, data.imageUrl);
-        return data.imageUrl;
+    if (process.env.EXPO_PUBLIC_DOMAIN?.trim()) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      try {
+        const data = await crawlProductImage({ query }, { signal: controller.signal });
+        if (data.imageUrl) {
+          liveSessionImageCache.set(norm, data.imageUrl);
+          return data.imageUrl;
+        }
+      } finally {
+        clearTimeout(timeout);
       }
     }
   } catch {}
@@ -585,46 +587,93 @@ export const STORYLINE_SPARKS = [
 export type AiProvider = "nvidia" | "free" | "offline";
 
 export const AI_CONFIG_STORAGE_KEY = "dish-to-basket.ai-config.v5";
-export const DEFAULT_AI_KEY =
-  process.env.EXPO_PUBLIC_NVIDIA_NIM_API_KEY ||
-  "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";
+const SECURE_AI_KEY_STORAGE_KEY = "dish-to-basket.nvidia-nim-api-key.v1";
 export const DEFAULT_AI_BASE_URL =
   process.env.EXPO_PUBLIC_NVIDIA_NIM_BASE_URL || "https://integrate.api.nvidia.com/v1";
-export const DEFAULT_AI_MODEL = "meta/llama-3.2-11b-vision-instruct";
+export const DEFAULT_AI_MODEL =
+  process.env.EXPO_PUBLIC_NVIDIA_NIM_MODEL || "meta/llama-3.2-11b-vision-instruct";
 
 export async function getAiConfig(): Promise<{
   provider: AiProvider;
   apiKey: string;
   baseUrl: string;
   model: string;
+  legacyKeyDiscarded: boolean;
 }> {
+  let savedSettings: Record<string, unknown> = {};
   try {
     const raw = await AsyncStorage.getItem(AI_CONFIG_STORAGE_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw);
-      return {
-        provider: parsed.provider || (DEFAULT_AI_KEY ? "nvidia" : "free"),
-        apiKey: parsed.apiKey || DEFAULT_AI_KEY,
-        baseUrl: parsed.baseUrl || DEFAULT_AI_BASE_URL,
-        model: parsed.model || DEFAULT_AI_MODEL,
-      };
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        savedSettings = parsed as Record<string, unknown>;
+      }
     }
   } catch {}
+
+  const hadLegacyKey = typeof savedSettings.apiKey === "string" && savedSettings.apiKey.trim().length > 0;
+  if (Object.prototype.hasOwnProperty.call(savedSettings, "apiKey")) {
+    delete savedSettings.apiKey;
+    try {
+      await AsyncStorage.setItem(AI_CONFIG_STORAGE_KEY, JSON.stringify(savedSettings));
+    } catch {
+      throw new Error("Could not securely remove the previously saved API key. Please clear app data before adding a new key.");
+    }
+  }
+
+  let apiKey = "";
+  try {
+    apiKey = (await SecureStore.getItemAsync(SECURE_AI_KEY_STORAGE_KEY)) || "";
+  } catch {
+    throw new Error("Secure device storage is unavailable. Update the app and try again.");
+  }
+
+  const configuredProvider = savedSettings.provider;
+  const provider: AiProvider =
+    configuredProvider === "nvidia" || configuredProvider === "free" || configuredProvider === "offline"
+      ? configuredProvider
+      : apiKey
+        ? "nvidia"
+        : "free";
+  const baseUrl =
+    typeof savedSettings.baseUrl === "string" && savedSettings.baseUrl.trim()
+      ? savedSettings.baseUrl
+      : DEFAULT_AI_BASE_URL;
+  const model =
+    typeof savedSettings.model === "string" && savedSettings.model.trim()
+      ? savedSettings.model
+      : DEFAULT_AI_MODEL;
+
   return {
-    provider: DEFAULT_AI_KEY ? "nvidia" : "free",
-    apiKey: DEFAULT_AI_KEY,
-    baseUrl: DEFAULT_AI_BASE_URL,
-    model: DEFAULT_AI_MODEL,
+    provider,
+    apiKey,
+    baseUrl,
+    model,
+    legacyKeyDiscarded: hadLegacyKey && !apiKey,
   };
 }
 
 export async function saveAiConfig(config: {
   provider: AiProvider;
-  apiKey: string;
+  apiKey?: string;
+  clearApiKey?: boolean;
   baseUrl: string;
   model: string;
 }): Promise<void> {
-  await AsyncStorage.setItem(AI_CONFIG_STORAGE_KEY, JSON.stringify(config));
+  if (config.clearApiKey) {
+    await SecureStore.deleteItemAsync(SECURE_AI_KEY_STORAGE_KEY);
+  } else if (config.apiKey?.trim()) {
+    await SecureStore.setItemAsync(SECURE_AI_KEY_STORAGE_KEY, config.apiKey.trim());
+  }
+
+  await AsyncStorage.setItem(
+    AI_CONFIG_STORAGE_KEY,
+    JSON.stringify({
+      provider: config.provider,
+      baseUrl: config.baseUrl,
+      model: config.model,
+    }),
+  );
 }
 
 // Generate genuine live store search URLs
