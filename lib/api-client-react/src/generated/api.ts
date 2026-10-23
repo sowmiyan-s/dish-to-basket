@@ -21,8 +21,10 @@ import type {
 
 import type {
   AnalyzeIngredientPlanRequest,
+  CrawlProductImageParams,
   HealthStatus,
-  IngredientPlanResponse
+  IngredientPlanResponse,
+  ProductImageCrawlResponse
 } from './api.schemas';
 
 import { customFetch } from '../custom-fetch';
@@ -218,4 +220,89 @@ export const useAnalyzeIngredientPlan = <TError = ErrorType<void>,
       > => {
       return useMutation(getAnalyzeIngredientPlanMutationOptions(options));
     }
+
+export const getCrawlProductImageUrl = (params: CrawlProductImageParams,) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? 'null' : String(value))
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0 ? `/api/product-images/crawl?${stringifiedParams}` : `/api/product-images/crawl`
+}
+
+/**
+ * Searches available product-image sources for a grocery item.
+ * @summary Find a product image
+ */
+export const crawlProductImage = async (params: CrawlProductImageParams, options?: Parameters<typeof customFetch>[1]): Promise<ProductImageCrawlResponse> => {
+
+  return customFetch<ProductImageCrawlResponse>(getCrawlProductImageUrl(params),
+  {
+    ...options,
+    method: 'GET'
+
+
+  }
+);}
+
+
+
+
+
+export const getCrawlProductImageQueryKey = (params?: CrawlProductImageParams,) => {
+    return [
+    `/api/product-images/crawl`, ...(params ? [params] : [])
+    ] as const;
+    }
+
+
+export const getCrawlProductImageQueryOptions = <TData = Awaited<ReturnType<typeof crawlProductImage>>, TError = ErrorType<void>>(params: CrawlProductImageParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof crawlProductImage>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+) => {
+
+const {query: queryOptions, request: requestOptions} = options ?? {};
+
+  const queryKey =  queryOptions?.queryKey ?? getCrawlProductImageQueryKey(params);
+
+
+
+    const queryFn: QueryFunction<Awaited<ReturnType<typeof crawlProductImage>>> = ({ signal }) => crawlProductImage(params, { signal, ...requestOptions });
+
+
+
+
+
+   return  { queryKey, queryFn, ...queryOptions} as UseQueryOptions<Awaited<ReturnType<typeof crawlProductImage>>, TError, TData> & { queryKey: QueryKey }
+}
+
+export type CrawlProductImageQueryResult = NonNullable<Awaited<ReturnType<typeof crawlProductImage>>>
+export type CrawlProductImageQueryError = ErrorType<void>
+
+
+/**
+ * @summary Find a product image
+ */
+
+export function useCrawlProductImage<TData = Awaited<ReturnType<typeof crawlProductImage>>, TError = ErrorType<void>>(
+ params: CrawlProductImageParams, options?: { query?:UseQueryOptions<Awaited<ReturnType<typeof crawlProductImage>>, TError, TData>, request?: SecondParameter<typeof customFetch>}
+
+ ):  UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+
+  const queryOptions = getCrawlProductImageQueryOptions(params,options)
+
+  const query = useQuery(queryOptions) as  UseQueryResult<TData, TError> & { queryKey: QueryKey };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+
+
+
+
+
 
