@@ -7,6 +7,8 @@
  */
 
 export * from './analyzeIngredientPlanRequest';
+export * from './crawlProductImageParams';
 export * from './healthStatus';
 export * from './ingredientPlanItem';
 export * from './ingredientPlanResponse';
+export * from './productImageCrawlResponse';
