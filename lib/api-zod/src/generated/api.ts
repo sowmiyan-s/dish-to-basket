@@ -53,3 +53,22 @@ export const AnalyzeIngredientPlanResponse = zod.object({
 })
 
 
+/**
+ * Searches available product-image sources for a grocery item.
+ * @summary Find a product image
+ */
+
+
+
+export const CrawlProductImageQueryParams = zod.object({
+  "query": zod.coerce.string().min(1)
+})
+
+export const CrawlProductImageResponse = zod.object({
+  "query": zod.string(),
+  "imageUrl": zod.union([zod.string().url(),zod.null()]),
+  "found": zod.boolean(),
+  "timestamp": zod.coerce.date()
+})
+
+
