@@ -62,13 +62,21 @@ Dish to Basket is an autonomous, agentic culinary planner and real-time quick-co
    ```sh
    cp .env.example .env
    ```
-   Add your `NVIDIA_NIM_API_KEY` (or configure directly in the in-app Settings tab).
+   `NVIDIA_NIM_API_KEY` configures the API server. For the mobile app, enter your NVIDIA NIM key in Settings; the app stores it with the platform secure-storage module on supported devices. Never put a key in an `EXPO_PUBLIC_` variable.
 
 3. Start the application:
    ```sh
    pnpm --filter @workspace/dish-to-basket run dev
    ```
    Open **[http://localhost:8081](http://localhost:8081)** in your browser or scan the QR code in Expo Go.
+
+---
+
+## Android APK GitHub Release
+
+The **Build Android APK** workflow runs when you push a `v*` tag or start it from GitHub Actions with a release tag such as `v1.0.0`. It builds an APK and attaches it to a GitHub Release.
+
+The APK is debug-signed for direct installation and testing; it is not a Play Store release. No AI key is needed during the build. Configure NVIDIA NIM from the app's Settings tab after installing. Optionally set the repository variable `EXPO_PUBLIC_DOMAIN` to enable the API-backed product-image crawler in the APK.
 
 ---
 
