@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: ingredient-plans
     description: AI-generated cooking ingredient plans
+  - name: product-images
+    description: Product image discovery
 paths:
   /healthz:
     get:
@@ -49,6 +51,28 @@ paths:
           description: Invalid dish or serving input
         "502":
           description: The configured model returned an invalid or unavailable response
+  /product-images/crawl:
+    get:
+      operationId: crawlProductImage
+      tags: [product-images]
+      summary: Find a product image
+      description: Searches available product-image sources for a grocery item.
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+      responses:
+        "200":
+          description: Product image search result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductImageCrawlResponse"
+        "400":
+          description: Missing product query
 components:
   schemas:
     HealthStatus:
@@ -117,4 +141,24 @@ components:
         - ingredients
         - provider
         - model
+    ProductImageCrawlResponse:
+      type: object
+      properties:
+        query:
+          type: string
+        imageUrl:
+          anyOf:
+            - type: string
+              format: uri
+            - type: "null"
+        found:
+          type: boolean
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - query
+        - imageUrl
+        - found
+        - timestamp
 
